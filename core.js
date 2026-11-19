@@ -2,34 +2,49 @@
  * Pure tariff maths for the token status bar.
  *
  * Everything here is deterministic and side-effect free: the Host half folds session
- * events into raw token counters, and this module decides what one counter is worth
- * under the peak or off-peak tariff of the configured plan.
+ * events into raw token counters per model and per tariff, and this module decides what
+ * one counter is worth under the peak or off-peak tariff of the plan published for that
+ * model.
  *
- * The plan is described by the intervals in which the FULL price applies. Whatever is
- * not inside a peak interval is billed at the discounted off-peak price, so a plan with
- * two expensive windows a day is two entries here.
+ * A plan is described by the intervals in which the FULL price applies. Whatever is not
+ * inside a peak interval is billed at the discounted off-peak price, so a plan with two
+ * expensive windows a day is two entries here.
  */
 
 /** @typedef {{ cacheHit: number, cacheMiss: number, cacheWrite: number, output: number, calls: number }} Bucket */
+/** @typedef {{ cacheHit: number, cacheMiss: number, output: number }} PriceList */
+/** @typedef {{ peak: PriceList, offPeak: PriceList }} Plan */
 /** @typedef {{ from: number, to: number }} MinuteWindow */
 
-/** Price per 1,000,000 tokens, in `currency`. */
+/** Models DeepSeek Harness offers a price list for. */
+export const MODELS = ['deepseek-flash', 'deepseek-v4-pro']
+
+/** Price per 1,000,000 tokens, in USD, as published for each model. */
+export const DEFAULT_PLANS = {
+  'deepseek-flash': {
+    peak: { cacheHit: 0.006, cacheMiss: 0.3, output: 1.2 },
+    offPeak: { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 },
+  },
+  'deepseek-v4-pro': {
+    peak: { cacheHit: 0.044, cacheMiss: 1.32, output: 3.96 },
+    offPeak: { cacheHit: 0.022, cacheMiss: 0.66, output: 1.98 },
+  },
+}
+
+/** Plans and prices for every model the bar knows about, keyed by model id. */
 export const DEFAULT_CONFIG = {
   currency: 'USD',
-  /** Fallback exchange rate used when a plan lists no separate CNY prices. */
+  /** Fallback exchange rate used to derive the second currency. */
   cnyPerUsd: 7.1,
-  /** Plan prices. `cacheMiss` also prices prompt tokens written into the cache. */
-  pricing: {
-    peak: { cacheHit: 0.07, cacheMiss: 0.27, output: 1.1 },
-    offPeak: { cacheHit: 0.035, cacheMiss: 0.135, output: 0.55 },
-  },
-  /** Optional second price list in CNY per 1,000,000 tokens, charged as published. */
-  pricingCny: null,
+  /** One plan per model; a session is charged by the plan of the model that ran it. */
+  models: DEFAULT_PLANS,
+  /** Model assumed when the session log does not say which one ran. */
+  defaultModel: 'deepseek-flash',
   /**
-   * Intervals of the full tariff in UTC as `HH:MM`. DeepSeek bills peak from 00:30 to
-   * 16:30 UTC and discounts the rest of the day.
+   * Intervals of the full tariff in UTC as `HH:MM`. DeepSeek bills peak from 01:00 to
+   * 04:00 and from 06:00 to 10:00 UTC and discounts the rest of the day.
    */
-  peakWindows: [{ from: '00:30', to: '16:30' }],
+  peakWindows: [{ from: '01:00', to: '04:00' }, { from: '06:00', to: '10:00' }],
   /** `'session'` shows the open Conversation first, `'process'` every session in the process. */
   scope: 'session',
   /** Interface language: `'auto'` follows the Harness interface, otherwise `'en'` or `'ru'`. */
@@ -39,9 +54,22 @@ export const DEFAULT_CONFIG = {
 /** Languages the bar can be pinned to; `'auto'` follows the Harness interface language. */
 export const LANGUAGES = ['auto', 'en', 'ru']
 
+/** Longest model id a config may carry; a model name is an identifier, not a sentence. */
+const MAX_MODEL_ID = 64
+
+/** Plans one config may carry; the panel offers far fewer. */
+const MAX_MODELS = 16
+
 /** Normalizes whatever a config carries into a supported language id. */
 export function resolveLanguage(raw) {
   return raw === 'en' || raw === 'ru' ? raw : 'auto'
+}
+
+/** Normalizes a model id, or returns `undefined` when it is not usable as one. */
+export function normalizeModelId(raw) {
+  if (typeof raw !== 'string') return undefined
+  const id = raw.trim()
+  return id === '' || id.length > MAX_MODEL_ID ? undefined : id
 }
 
 const TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/
@@ -74,6 +102,50 @@ function priceList(raw) {
 function completePriceList(raw) {
   const list = priceList(raw)
   return list.cacheHit < 0 || list.cacheMiss < 0 || list.output < 0 ? null : list
+}
+
+/** Fills the gaps of a partial plan from `base`, so a half-written plan still prices. */
+function planWithBase(base, raw) {
+  const source = raw !== null && typeof raw === 'object' ? raw : {}
+  return {
+    peak: {
+      cacheHit: numberOr(priceList(source.peak).cacheHit, base.peak.cacheHit),
+      cacheMiss: numberOr(priceList(source.peak).cacheMiss, base.peak.cacheMiss),
+      output: numberOr(priceList(source.peak).output, base.peak.output),
+    },
+    offPeak: {
+      cacheHit: numberOr(priceList(source.offPeak).cacheHit, base.offPeak.cacheHit),
+      cacheMiss: numberOr(priceList(source.offPeak).cacheMiss, base.offPeak.cacheMiss),
+      output: numberOr(priceList(source.offPeak).output, base.offPeak.output),
+    },
+  }
+}
+
+/** A plan for a model, with the loaded fallbacks used when the plan is missing entirely. */
+function basePlanOf(model) {
+  return DEFAULT_PLANS[model] !== undefined ? DEFAULT_PLANS[model] : DEFAULT_PLANS[MODELS[0]]
+}
+
+export function clonePlan(plan) {
+  return {
+    peak: { cacheHit: plan.peak.cacheHit, cacheMiss: plan.peak.cacheMiss, output: plan.peak.output },
+    offPeak: { cacheHit: plan.offPeak.cacheHit, cacheMiss: plan.offPeak.cacheMiss, output: plan.offPeak.output },
+  }
+}
+
+/** The plan that prices `model`; an unknown model falls back to the default one. */
+export function planFor(config, model) {
+  const models = config !== null && typeof config === 'object' && config.models !== null &&
+    typeof config.models === 'object'
+    ? config.models
+    : null
+  if (models !== null) {
+    if (typeof model === 'string' && models[model] !== undefined) return models[model]
+    if (models[config.defaultModel] !== undefined) return models[config.defaultModel]
+    const first = Object.keys(models)[0]
+    if (first !== undefined) return models[first]
+  }
+  return DEFAULT_PLANS[MODELS[0]]
 }
 
 function insideWindow(minute, window) {
@@ -114,15 +186,37 @@ function parseWindows(raw) {
   return windows
 }
 
+/**
+ * Reads every plan a config carries. Defaults are seeded first, so the bar always offers a
+ * complete plan for both models even when the profile mentions only one of them.
+ */
+function parseModels(source, defaultModel, legacyPlan) {
+  const models = {}
+  for (const model of MODELS) models[model] = clonePlan(DEFAULT_PLANS[model])
+
+  const explicit = new Set()
+  const rawModels = source.models !== null && typeof source.models === 'object' ? source.models : null
+  if (rawModels !== null) {
+    for (const [rawId, rawPlan] of Object.entries(rawModels).slice(0, MAX_MODELS)) {
+      const id = normalizeModelId(rawId)
+      if (id === undefined) continue
+      models[id] = planWithBase(basePlanOf(id), rawPlan)
+      explicit.add(id)
+    }
+  }
+
+  // A config written before plans were per model carries one price list; it belongs to the
+  // model this profile runs by default, which is the one those prices were tuned for.
+  if (legacyPlan !== null && !explicit.has(defaultModel)) {
+    models[defaultModel] = legacyPlan
+  }
+  return models
+}
+
 /** Accepts whatever the Loader row carries and returns a complete, valid config. */
 export function resolveConfig(raw) {
   const source = raw !== null && typeof raw === 'object' ? raw : {}
-  const sourcePricing = source.pricing !== null && typeof source.pricing === 'object' ? source.pricing : {}
-  const pricingCnySource = source.pricingCny !== null && typeof source.pricingCny === 'object' ? source.pricingCny : null
-  const pricingCny = pricingCnySource === null ? null : {
-    peak: completePriceList(pricingCnySource.peak),
-    offPeak: completePriceList(pricingCnySource.offPeak),
-  }
+  const legacySource = source.pricing !== null && typeof source.pricing === 'object' ? source.pricing : {}
 
   // Read peak intervals; a config written as off-peak intervals is complemented once.
   let windows = parseWindows(source.peakWindows)
@@ -132,26 +226,26 @@ export function resolveConfig(raw) {
   }
   if (windows.length === 0) windows = parseWindows(DEFAULT_CONFIG.peakWindows)
 
-  const usableCny = pricingCny !== null && pricingCny.peak !== null && pricingCny.offPeak !== null
+  let defaultModel = normalizeModelId(source.defaultModel)
+  if (defaultModel === undefined) defaultModel = DEFAULT_CONFIG.defaultModel
+
+  const legacyPlan = completePriceList(legacySource.peak) !== null && completePriceList(legacySource.offPeak) !== null
+    ? {
+      peak: completePriceList(legacySource.peak),
+      offPeak: completePriceList(legacySource.offPeak),
+    }
+    : null
+
+  const models = parseModels(source, defaultModel, legacyPlan)
+  if (models[defaultModel] === undefined) models[defaultModel] = clonePlan(basePlanOf(defaultModel))
 
   return {
     currency: typeof source.currency === 'string' && source.currency.trim() !== ''
       ? source.currency.trim().slice(0, 8)
       : DEFAULT_CONFIG.currency,
     cnyPerUsd: numberOr(source.cnyPerUsd, DEFAULT_CONFIG.cnyPerUsd),
-    pricing: {
-      peak: {
-        cacheHit: numberOr(priceList(sourcePricing.peak).cacheHit, DEFAULT_CONFIG.pricing.peak.cacheHit),
-        cacheMiss: numberOr(priceList(sourcePricing.peak).cacheMiss, DEFAULT_CONFIG.pricing.peak.cacheMiss),
-        output: numberOr(priceList(sourcePricing.peak).output, DEFAULT_CONFIG.pricing.peak.output),
-      },
-      offPeak: {
-        cacheHit: numberOr(priceList(sourcePricing.offPeak).cacheHit, DEFAULT_CONFIG.pricing.offPeak.cacheHit),
-        cacheMiss: numberOr(priceList(sourcePricing.offPeak).cacheMiss, DEFAULT_CONFIG.pricing.offPeak.cacheMiss),
-        output: numberOr(priceList(sourcePricing.offPeak).output, DEFAULT_CONFIG.pricing.offPeak.output),
-      },
-    },
-    pricingCny: usableCny ? pricingCny : null,
+    models,
+    defaultModel,
     peakWindows: windows.map(window => ({ from: clockOf(window.from), to: clockOf(window.to) })),
     scope: source.scope === 'process' ? 'process' : 'session',
     language: resolveLanguage(source.language),
@@ -220,9 +314,9 @@ export function promptTokensOf(bucket) {
   return bucket.cacheHit + bucket.cacheMiss + bucket.cacheWrite
 }
 
-/** What `bucket` costs under one tariff and one price list. */
-export function costOf(bucket, tariff, pricing) {
-  const price = pricing[tariff]
+/** What `bucket` costs under one tariff and one plan. */
+export function costOf(bucket, tariff, plan) {
+  const price = plan[tariff]
   return (
     bucket.cacheHit * price.cacheHit +
     (bucket.cacheMiss + bucket.cacheWrite) * price.cacheMiss +
@@ -240,11 +334,8 @@ export function mergeBuckets(into, from) {
   return into
 }
 
-/** Both currencies for one pair of buckets. */
-export function costPair(peak, offPeak, config) {
-  const usd = costOf(peak, 'peak', config.pricing) + costOf(offPeak, 'offPeak', config.pricing)
-  const cny = config.pricingCny !== null
-    ? costOf(peak, 'peak', config.pricingCny) + costOf(offPeak, 'offPeak', config.pricingCny)
-    : usd * config.cnyPerUsd
-  return { usd, cny }
+/** Both currencies for one pair of buckets priced by one plan. */
+export function costPair(peak, offPeak, plan, cnyPerUsd) {
+  const usd = costOf(peak, 'peak', plan) + costOf(offPeak, 'offPeak', plan)
+  return { usd, cny: usd * cnyPerUsd }
 }

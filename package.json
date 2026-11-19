@@ -1,7 +1,7 @@
 {
   "name": "dsh-token-status",
-  "version": "1.0.0",
-  "description": "Token spend by peak and off-peak tariff, prompt-cache hit and cost in the DeepSeek Harness Web GUI bottom status bar, with a peak-hour indicator and an English/Russian interface",
+  "version": "1.1.0",
+  "description": "Token spend by peak and off-peak tariff, prompt-cache hit and cost per model (deepseek-flash, deepseek-v4-pro) in the DeepSeek Harness Web GUI bottom status bar, with a peak-hour indicator, an English/Russian interface and one-click price autofill",
   "type": "module",
   "license": "MIT",
   "author": "Nosferatus83",
@@ -31,6 +31,7 @@
   "files": [
     "index.js",
     "core.js",
+    "pricing.js",
     "client.js",
     "cordis.patch.yml",
     "locale/*.json",

@@ -7,18 +7,33 @@ window.__ModuleLoader__.load({
     const NS = 'tokenStatus'
     /** The last language this browser picked, so the bar renders right before the first read. */
     const LANGUAGE_KEY = 'token-status:language'
-    const POLL_MS = 5000
+    /** A model switch is picked up by the next poll; keep that short enough to feel instant. */
+    const POLL_MS = 3000
     const TICK_MS = 1000
     const REQUEST_TIMEOUT_MS = 8000
+    /** Loading the price page goes through two remote documents, so it gets its own budget. */
+    const PRICING_TIMEOUT_MS = 30000
     const ROUTE = '/token-status/snapshot'
     const SETTINGS_ROUTE = '/token-status/settings'
+    const PRICING_ROUTE = '/token-status/pricing/refresh'
 
-    /** Mirrors the Host defaults so the dot, the cost and the form work before the first snapshot. */
-    const DEFAULT_PEAK_WINDOWS = [{ from: '00:30', to: '16:30' }]
+    /**
+     * Mirrors the Host catalog so the dot, the cost and the form work before the first
+     * snapshot. Prices are USD per 1,000,000 tokens, as published for each model.
+     */
+    const MODELS = ['deepseek-flash', 'deepseek-v4-pro']
+    const DEFAULT_MODEL = 'deepseek-flash'
+    const DEFAULT_PEAK_WINDOWS = [{ from: '01:00', to: '04:00' }, { from: '06:00', to: '10:00' }]
     const DEFAULT_RATE = 7.1
-    const DEFAULT_PRICING = {
-      peak: { cacheHit: 0.07, cacheMiss: 0.27, output: 1.1 },
-      offPeak: { cacheHit: 0.035, cacheMiss: 0.135, output: 0.55 },
+    const DEFAULT_PLANS = {
+      'deepseek-flash': {
+        peak: { cacheHit: 0.006, cacheMiss: 0.3, output: 1.2 },
+        offPeak: { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 },
+      },
+      'deepseek-v4-pro': {
+        peak: { cacheHit: 0.044, cacheMiss: 1.32, output: 3.96 },
+        offPeak: { cacheHit: 0.022, cacheMiss: 0.66, output: 1.98 },
+      },
     }
 
     const DICTS = {
@@ -37,7 +52,7 @@ window.__ModuleLoader__.load({
         miss: 'miss',
         output: 'output',
         cost: 'cost',
-        costTitle: 'Estimated charge under the configured plan prices, in USD and CNY',
+        costTitle: 'Estimated charge under the configured model prices, in USD and CNY',
         total: 'total',
         totalTitle: 'Every billed token in this Harness process, all sessions',
         since: 'since launch',
@@ -47,16 +62,25 @@ window.__ModuleLoader__.load({
         scopeAll: 'all',
         scopeSessionTitle: 'Billed to the open Conversation',
         scopeAllTitle: 'No Conversation is open, so every session in this process is counted',
+        model: 'model',
+        allModels: 'all models',
+        modelTitle: 'The model this session is running; the counters and the cost belong to it',
+        allModelsTitle: 'Every session in this process, each model priced by its own plan',
         settingsButton: 'Tariff settings',
         settingsTitle: 'Tariff settings',
-        settingsHint: 'Prices per 1,000,000 tokens in USD. Peak hours are UTC; everything outside them is off-peak.',
+        settingsHint: 'Prices per 1,000,000 tokens in USD, one plan per model. Peak hours are UTC; everything outside them is off-peak.',
+        modelLabel: 'Model',
+        savePrices: 'Save prices',
+        pricesSaved: 'Prices saved.',
+        autoFill: 'Autofill',
+        autoFillBusy: 'Fetching…',
+        autoFilled: 'Prices loaded from the DeepSeek docs — save them with “Save prices”.',
         rate: 'USD→CNY',
         windows: 'Peak hours (UTC)',
         addWindow: 'Add interval',
         removeWindow: 'Remove interval',
         noWindows: 'Set at least one peak interval.',
         scopeLabel: 'Scope',
-        cnyNote: 'The profile sets exact CNY prices, so the rate is ignored.',
         save: 'Save',
         cancel: 'Cancel',
         reset: 'Defaults',
@@ -68,6 +92,7 @@ window.__ModuleLoader__.load({
         langAuto: 'Match the interface',
         errPricing: 'Every price must be a non-negative number.',
         errRate: 'The USD→CNY rate must be above zero.',
+        errFetch: 'Could not load the DeepSeek price list. Check the network and try again.',
         badRequest: 'The settings request was rejected. Reload the page and try again.',
       },
       ru: {
@@ -85,7 +110,7 @@ window.__ModuleLoader__.load({
         miss: 'мимо',
         output: 'выход',
         cost: 'стоимость',
-        costTitle: 'Оценка по настроенным тарифам плана, в USD и CNY',
+        costTitle: 'Оценка по настроенным тарифам моделей, в USD и CNY',
         total: 'всего',
         totalTitle: 'Все списанные токены в этом процессе Harness, по всем сессиям',
         since: 'с запуска',
@@ -95,16 +120,25 @@ window.__ModuleLoader__.load({
         scopeAll: 'всё',
         scopeSessionTitle: 'Расход открытого диалога',
         scopeAllTitle: 'Диалог не открыт, поэтому считаются все сессии процесса',
+        model: 'модель',
+        allModels: 'все модели',
+        modelTitle: 'Модель, на которой идёт эта сессия; счётчики и стоимость относятся к ней',
+        allModelsTitle: 'Все сессии процесса, каждая модель — по своему тарифу',
         settingsButton: 'Настройки тарифа',
         settingsTitle: 'Настройки тарифа',
-        settingsHint: 'Цены за 1 000 000 токенов в USD. Пиковые часы — UTC; всё остальное время непиковое.',
+        settingsHint: 'Цены за 1 000 000 токенов в USD, свой план на каждую модель. Пиковые часы — UTC; всё остальное время непиковое.',
+        modelLabel: 'Модель',
+        savePrices: 'Записать цены',
+        pricesSaved: 'Цены записаны.',
+        autoFill: 'Автозаполнить',
+        autoFillBusy: 'Загружаю…',
+        autoFilled: 'Цены получены из документации DeepSeek — сохраните их кнопкой «Записать цены».',
         rate: 'USD→CNY',
         windows: 'Пиковые часы (UTC)',
         addWindow: 'Добавить интервал',
         removeWindow: 'Убрать интервал',
         noWindows: 'Задайте хотя бы один пиковый интервал.',
         scopeLabel: 'Счёт',
-        cnyNote: 'В профиле заданы отдельные цены CNY — курс не используется.',
         save: 'Сохранить',
         cancel: 'Отмена',
         reset: 'По умолчанию',
@@ -116,6 +150,7 @@ window.__ModuleLoader__.load({
         langAuto: 'Как в интерфейсе',
         errPricing: 'Все цены должны быть неотрицательными числами.',
         errRate: 'Курс USD→CNY должен быть больше нуля.',
+        errFetch: 'Не удалось получить прайс DeepSeek. Проверьте сеть и повторите.',
         badRequest: 'Запрос настроек отклонён. Обновите страницу и попробуйте снова.',
       },
     }
@@ -144,6 +179,7 @@ window.__ModuleLoader__.load({
       if (result.code === 'pricing') return t('errPricing')
       if (result.code === 'rate') return t('errRate')
       if (result.code === 'windows') return t('noWindows')
+      if (result.code === 'fetch') return t('errFetch')
       if (result.code === 'json') return t('badRequest')
       return typeof result.message === 'string' && result.message !== '' ? result.message : t('saveFailed')
     }
@@ -167,7 +203,8 @@ window.__ModuleLoader__.load({
   font:inherit;line-height:1}
 .dts-icon-btn:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dts-icon-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.dts-panel{position:fixed;right:12px;bottom:34px;z-index:70;width:344px;box-sizing:border-box;padding:12px;
+.dts-model{color:var(--dsw-alias-label-secondary)}
+.dts-panel{position:fixed;right:12px;bottom:34px;z-index:70;width:352px;box-sizing:border-box;padding:12px;
   border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-overlay);
   box-shadow:0 12px 32px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:11px;line-height:1.35;
   white-space:normal;text-align:left;font-variant-numeric:normal}
@@ -183,6 +220,7 @@ window.__ModuleLoader__.load({
 .dts-field{display:flex;align-items:center;gap:8px;margin-top:8px}
 .dts-field-label{flex:0 0 76px;color:var(--dsw-alias-label-secondary)}
 .dts-field-body{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0}
+.dts-inline-btn{flex:0 0 auto;height:24px;padding:0 8px;font-size:10px}
 .dts-block{margin-top:10px}
 .dts-block-label{color:var(--dsw-alias-label-secondary);margin-bottom:4px}
 .dts-window-list{display:flex;flex-direction:column;gap:4px;align-items:stretch}
@@ -194,7 +232,10 @@ window.__ModuleLoader__.load({
 .dts-mini-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dts-mini-btn:disabled{opacity:.5;cursor:default}
 .dts-add{align-self:flex-start;height:22px;font-size:10px;padding:0 8px;color:var(--dsw-alias-label-secondary)}
+.dts-autofill{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.dts-autofill .dts-note-inline{flex:1 1 150px;min-width:0}
 .dts-note{margin-top:8px;color:var(--dsw-alias-label-secondary)}
+.dts-note-inline{color:var(--dsw-alias-label-secondary)}
 .dts-error{margin-top:8px;color:var(--dsw-alias-state-error-primary)}
 .dts-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:12px}
 .dts-btn{height:24px;padding:0 10px;border-radius:4px;border:1px solid var(--dsw-alias-border-l1);
@@ -289,64 +330,140 @@ window.__ModuleLoader__.load({
       return bucket !== null && bucket !== undefined ? bucket : ZERO_BUCKET
     }
 
-    function costOfBuckets(bucket, pricing, tariff) {
-      const price = pricing[tariff]
+    function costOfBuckets(bucket, plan, tariff) {
+      const price = plan[tariff]
       return (bucket.cacheHit * price.cacheHit +
         (bucket.cacheMiss + bucket.cacheWrite) * price.cacheMiss +
         bucket.output * price.output) / 1e6
     }
 
+    function clonePlan(plan) {
+      return {
+        peak: { cacheHit: plan.peak.cacheHit, cacheMiss: plan.peak.cacheMiss, output: plan.peak.output },
+        offPeak: { cacheHit: plan.offPeak.cacheHit, cacheMiss: plan.offPeak.cacheMiss, output: plan.offPeak.output },
+      }
+    }
+
+    /** A complete plan: whatever the payload lacks comes from `base`. */
+    function completePlan(base, raw) {
+      const source = raw !== null && typeof raw === 'object' ? raw : {}
+      const peak = source.peak !== null && typeof source.peak === 'object' ? source.peak : {}
+      const offPeak = source.offPeak !== null && typeof source.offPeak === 'object' ? source.offPeak : {}
+      const pick = (list, key, fallback) => (Number.isFinite(list[key]) && list[key] >= 0 ? list[key] : fallback)
+      return {
+        peak: {
+          cacheHit: pick(peak, 'cacheHit', base.peak.cacheHit),
+          cacheMiss: pick(peak, 'cacheMiss', base.peak.cacheMiss),
+          output: pick(peak, 'output', base.peak.output),
+        },
+        offPeak: {
+          cacheHit: pick(offPeak, 'cacheHit', base.offPeak.cacheHit),
+          cacheMiss: pick(offPeak, 'cacheMiss', base.offPeak.cacheMiss),
+          output: pick(offPeak, 'output', base.offPeak.output),
+        },
+      }
+    }
+
     /**
-     * Both currencies for one session view. The plan may publish its CNY prices directly;
-     * without them the USD total is converted at the configured rate.
+     * Every plan the snapshot carries, always complete and always covering the known models.
+     * A snapshot from an earlier Host generation carries one price list instead; it belongs
+     * to the default model, which is what those prices were configured for.
      */
-    function moneyOf(view, pricing, pricingCny, rate) {
+    function plansOf(config) {
+      const source = config !== null && typeof config === 'object' ? config : {}
+      const plans = {}
+      for (const id of MODELS) plans[id] = clonePlan(DEFAULT_PLANS[id])
+
+      const models = source.models !== null && typeof source.models === 'object' ? source.models : null
+      if (models !== null) {
+        for (const [id, raw] of Object.entries(models)) {
+          const base = plans[id] !== undefined ? plans[id] : DEFAULT_PLANS[DEFAULT_MODEL]
+          plans[id] = completePlan(base, raw)
+        }
+      } else if (source.pricing !== null && typeof source.pricing === 'object') {
+        const model = typeof source.defaultModel === 'string' ? source.defaultModel : DEFAULT_MODEL
+        const base = plans[model] !== undefined ? plans[model] : DEFAULT_PLANS[DEFAULT_MODEL]
+        plans[model] = completePlan(base, source.pricing)
+      }
+      return plans
+    }
+
+    /** The plan that prices `model`, falling back the same way the Host does. */
+    function planOf(plans, config, model) {
+      if (typeof model === 'string' && plans[model] !== undefined) return plans[model]
+      const fallback = config !== null && typeof config === 'object' && typeof config.defaultModel === 'string'
+        ? config.defaultModel
+        : DEFAULT_MODEL
+      return plans[fallback] !== undefined ? plans[fallback] : plans[MODELS[0]]
+    }
+
+    /**
+     * Both currencies for one view. The Host already priced every model by its own plan, so
+     * its `cost` is authoritative; the local calculation only covers a snapshot without one.
+     */
+    function moneyOf(view, plans, config, rate) {
+      if (view !== null && view !== undefined && view.cost !== null && typeof view.cost === 'object' &&
+        Number.isFinite(view.cost.usd)) {
+        const usd = view.cost.usd
+        return { usd, cny: Number.isFinite(view.cost.cny) ? view.cost.cny : usd * rate }
+      }
+      const plan = planOf(plans, config, view !== null && view !== undefined ? view.model : undefined)
       const peak = bucketOf(view, 'peak')
       const offPeak = bucketOf(view, 'offPeak')
-      const usd = costOfBuckets(peak, pricing, 'peak') + costOfBuckets(offPeak, pricing, 'offPeak')
-      const cny = pricingCny !== null
-        ? costOfBuckets(peak, pricingCny, 'peak') + costOfBuckets(offPeak, pricingCny, 'offPeak')
-        : usd * rate
-      return { usd, cny }
+      const usd = costOfBuckets(peak, plan, 'peak') + costOfBuckets(offPeak, plan, 'offPeak')
+      return { usd, cny: usd * rate }
     }
 
     function textOfPrice(value, fallback) {
       return Number.isFinite(value) ? String(value) : String(fallback)
     }
 
+    /** The form's string-valued price row for one plan. */
+    function priceRowOf(plan) {
+      return {
+        peakCacheHit: textOfPrice(plan.peak.cacheHit, DEFAULT_PLANS[DEFAULT_MODEL].peak.cacheHit),
+        peakCacheMiss: textOfPrice(plan.peak.cacheMiss, DEFAULT_PLANS[DEFAULT_MODEL].peak.cacheMiss),
+        peakOutput: textOfPrice(plan.peak.output, DEFAULT_PLANS[DEFAULT_MODEL].peak.output),
+        offPeakCacheHit: textOfPrice(plan.offPeak.cacheHit, DEFAULT_PLANS[DEFAULT_MODEL].offPeak.cacheHit),
+        offPeakCacheMiss: textOfPrice(plan.offPeak.cacheMiss, DEFAULT_PLANS[DEFAULT_MODEL].offPeak.cacheMiss),
+        offPeakOutput: textOfPrice(plan.offPeak.output, DEFAULT_PLANS[DEFAULT_MODEL].offPeak.output),
+      }
+    }
+
     /**
-     * Turns the current snapshot config into the form's string-valued draft. The plan is
-     * described by its peak intervals, so the form always offers two rows: the second stays
-     * empty until a plan really has a second expensive window.
+     * Turns the snapshot config into the form's string-valued draft. The plan is described
+     * by its peak intervals, so the form always offers two rows: the second stays empty
+     * until a plan really has a second expensive window.
      */
     function draftFrom(config) {
       const source = config !== null && typeof config === 'object' ? config : {}
-      const pricing = source.pricing !== null && typeof source.pricing === 'object' ? source.pricing : {}
-      const peak = pricing.peak !== null && typeof pricing.peak === 'object' ? pricing.peak : {}
-      const offPeak = pricing.offPeak !== null && typeof pricing.offPeak === 'object' ? pricing.offPeak : {}
+      const plans = plansOf(source)
+      const modelIds = Object.keys(plans)
+      const selected = typeof source.defaultModel === 'string' && plans[source.defaultModel] !== undefined
+        ? source.defaultModel
+        : modelIds[0]
 
-      const rows = []
+      const rows = {}
+      for (const [id, plan] of Object.entries(plans)) rows[id] = priceRowOf(plan)
+
+      const windows = []
       for (const candidate of Array.isArray(source.peakWindows) ? source.peakWindows : []) {
         if (candidate === null || typeof candidate !== 'object') continue
-        rows.push({
+        windows.push({
           from: typeof candidate.from === 'string' ? candidate.from : '',
           to: typeof candidate.to === 'string' ? candidate.to : '',
         })
       }
-      if (rows.length === 0) {
-        rows.push({ from: DEFAULT_PEAK_WINDOWS[0].from, to: DEFAULT_PEAK_WINDOWS[0].to })
+      if (windows.length === 0) {
+        windows.push({ from: DEFAULT_PEAK_WINDOWS[0].from, to: DEFAULT_PEAK_WINDOWS[0].to })
       }
-      while (rows.length < 2) rows.push({ from: '', to: '' })
+      while (windows.length < 2) windows.push({ from: '', to: '' })
 
       return {
-        peakCacheHit: textOfPrice(peak.cacheHit, DEFAULT_PRICING.peak.cacheHit),
-        peakCacheMiss: textOfPrice(peak.cacheMiss, DEFAULT_PRICING.peak.cacheMiss),
-        peakOutput: textOfPrice(peak.output, DEFAULT_PRICING.peak.output),
-        offPeakCacheHit: textOfPrice(offPeak.cacheHit, DEFAULT_PRICING.offPeak.cacheHit),
-        offPeakCacheMiss: textOfPrice(offPeak.cacheMiss, DEFAULT_PRICING.offPeak.cacheMiss),
-        offPeakOutput: textOfPrice(offPeak.output, DEFAULT_PRICING.offPeak.output),
+        model: selected,
+        models: rows,
         cnyPerUsd: textOfPrice(source.cnyPerUsd, DEFAULT_RATE),
-        peakWindows: rows,
+        peakWindows: windows,
         scope: source.scope === 'process' ? 'process' : 'session',
         language: source.language === 'en' || source.language === 'ru' ? source.language : 'auto',
       }
@@ -390,6 +507,32 @@ window.__ModuleLoader__.load({
             ? body.code
             : undefined
           return { ok: false, message, code }
+        },
+        /** Asks the Host to load the published price list; the Host owns the network. */
+        async fetchPricing(controller) {
+          try {
+            const response = await fetch(PRICING_ROUTE, {
+              method: 'POST',
+              credentials: 'same-origin',
+              cache: 'no-store',
+              headers: { accept: 'application/json' },
+              signal: controller !== null && controller !== undefined ? controller.signal : undefined,
+            })
+            const body = await response.json().catch(() => null)
+            if (body !== null && typeof body === 'object' && body.ok === true &&
+              body.models !== null && typeof body.models === 'object') {
+              return { ok: true, models: body.models, source: body.source, fetchedAt: body.fetchedAt }
+            }
+            const code = body !== null && typeof body === 'object' && typeof body.code === 'string'
+              ? body.code
+              : undefined
+            const message = body !== null && typeof body === 'object' && typeof body.message === 'string'
+              ? body.message
+              : `HTTP ${response.status}`
+            return { ok: false, code, message }
+          } catch {
+            return { ok: false, code: 'fetch', message: '' }
+          }
         },
       }
     }
@@ -566,7 +709,9 @@ window.__ModuleLoader__.load({
           const [panelOpen, setPanelOpen] = React.useState(false)
           const [draft, setDraft] = React.useState(null)
           const [busy, setBusy] = React.useState(false)
+          const [autofilling, setAutofilling] = React.useState(false)
           const [saveError, setSaveError] = React.useState(null)
+          const [panelNote, setPanelNote] = React.useState(null)
           const [notice, setNotice] = React.useState(null)
           const rootRef = React.useRef(null)
 
@@ -597,16 +742,7 @@ window.__ModuleLoader__.load({
           }, [pendingLanguage, configLanguage, localLanguage])
 
           const windows = normaliseWindows(config.peakWindows)
-          const pricing = config.pricing !== null && typeof config.pricing === 'object' &&
-            config.pricing.peak !== null && typeof config.pricing.peak === 'object' &&
-            config.pricing.offPeak !== null && typeof config.pricing.offPeak === 'object'
-            ? config.pricing
-            : DEFAULT_PRICING
-          const pricingCny = config.pricingCny !== null && typeof config.pricingCny === 'object' &&
-            config.pricingCny.peak !== null && typeof config.pricingCny.peak === 'object' &&
-            config.pricingCny.offPeak !== null && typeof config.pricingCny.offPeak === 'object'
-            ? config.pricingCny
-            : null
+          const plans = plansOf(config)
           const rate = Number.isFinite(config.cnyPerUsd) ? config.cnyPerUsd : DEFAULT_RATE
 
           const peakNow = isPeakNow(now, windows)
@@ -627,18 +763,43 @@ window.__ModuleLoader__.load({
           const scopedToSession = sessionView !== null
           const view = scopedToSession ? sessionView : processView
 
+          // The model the counters belong to: the one the open session runs, or every model in
+          // the process. A session that has not started a request yet falls back to the default.
+          const displayModel = scopedToSession
+            ? (typeof sessionView.model === 'string' && sessionView.model !== '' ? sessionView.model : null)
+            : null
+          const modelLabel = scopedToSession
+            ? (displayModel !== null ? displayModel : t('allModels'))
+            : t('allModels')
+          const modelTitle = scopedToSession && displayModel !== null
+            ? `${t('modelTitle')}: ${displayModel}`
+            : t('allModelsTitle')
+
           const peak = bucketOf(view, 'peak')
           const offPeak = bucketOf(view, 'offPeak')
           const peakTokens = tokensOf(peak)
           const offPeakTokens = tokensOf(offPeak)
           const outputTokens = peak.output + offPeak.output
           const money = view !== null
-            ? moneyOf(view, pricing, pricingCny, rate)
+            ? moneyOf(view, plans, config, rate)
             : { usd: 0, cny: 0 }
           const processTokens = processView !== null && processView.tokens !== null &&
             typeof processView.tokens === 'object' && Number.isFinite(processView.tokens.total)
             ? processView.tokens.total
             : 0
+
+          // When several models share the view, the tooltip spells their charges out.
+          const perModelEntries = view !== null && view.perModel !== null && typeof view.perModel === 'object'
+            ? Object.entries(view.perModel)
+            : []
+          const costTitle = perModelEntries.length > 1
+            ? [t('costTitle')].concat(perModelEntries.map(([id, modelView]) => {
+              const modelMoney = modelView.cost !== null && typeof modelView.cost === 'object'
+                ? modelView.cost
+                : { usd: 0, cny: 0 }
+              return `${id}: ${formatMoney(modelMoney.usd, '$')} / ${formatMoney(modelMoney.cny, '¥')}`
+            })).join('\n')
+            : t('costTitle')
 
           // Dismiss the settings panel on an outside press or Escape.
           React.useEffect(() => {
@@ -665,42 +826,55 @@ window.__ModuleLoader__.load({
             }
             setDraft(draftFrom(config))
             setSaveError(null)
+            setPanelNote(null)
             setPanelOpen(true)
           }
 
-          const save = async () => {
-            if (draft === null || busy) return
-            const numeric = (text) => {
-              const parsed = Number(String(text).trim().replace(',', '.'))
-              return Number.isFinite(parsed) ? parsed : Number.NaN
-            }
-            const settings = {
-              pricing: {
+          const numeric = (text) => {
+            const parsed = Number(String(text).trim().replace(',', '.'))
+            return Number.isFinite(parsed) ? parsed : Number.NaN
+          }
+
+          /** Every model plan plus the shared constants, in the payload the Host validates. */
+          const settingsOf = (current) => {
+            const models = {}
+            for (const [id, row] of Object.entries(current.models)) {
+              models[id] = {
                 peak: {
-                  cacheHit: numeric(draft.peakCacheHit),
-                  cacheMiss: numeric(draft.peakCacheMiss),
-                  output: numeric(draft.peakOutput),
+                  cacheHit: numeric(row.peakCacheHit),
+                  cacheMiss: numeric(row.peakCacheMiss),
+                  output: numeric(row.peakOutput),
                 },
                 offPeak: {
-                  cacheHit: numeric(draft.offPeakCacheHit),
-                  cacheMiss: numeric(draft.offPeakCacheMiss),
-                  output: numeric(draft.offPeakOutput),
+                  cacheHit: numeric(row.offPeakCacheHit),
+                  cacheMiss: numeric(row.offPeakCacheMiss),
+                  output: numeric(row.offPeakOutput),
                 },
-              },
-              cnyPerUsd: numeric(draft.cnyPerUsd),
-              peakWindows: draft.peakWindows
+              }
+            }
+            return {
+              models,
+              defaultModel: current.model,
+              cnyPerUsd: numeric(current.cnyPerUsd),
+              peakWindows: current.peakWindows
                 .filter(row => row !== null && typeof row === 'object' &&
                   typeof row.from === 'string' && row.from !== '' &&
                   typeof row.to === 'string' && row.to !== '')
                 .map(row => ({ from: row.from, to: row.to })),
-              scope: draft.scope,
-              language: draft.language,
+              scope: current.scope,
+              language: current.language,
             }
-            const prices = [settings.pricing.peak, settings.pricing.offPeak]
-            const invalid = prices.some(tariff =>
-              !Number.isFinite(tariff.cacheHit) || tariff.cacheHit < 0 ||
-              !Number.isFinite(tariff.cacheMiss) || tariff.cacheMiss < 0 ||
-              !Number.isFinite(tariff.output) || tariff.output < 0) ||
+          }
+
+          /** Writes the draft through the Host; `keepOpen` is the "Save prices" behaviour. */
+          const persist = async (keepOpen) => {
+            if (draft === null || busy) return
+            const settings = settingsOf(draft)
+            const prices = Object.values(settings.models).flatMap(plan => [plan.peak, plan.offPeak])
+            const invalid = prices.length === 0 || prices.some(price =>
+              !Number.isFinite(price.cacheHit) || price.cacheHit < 0 ||
+              !Number.isFinite(price.cacheMiss) || price.cacheMiss < 0 ||
+              !Number.isFinite(price.output) || price.output < 0) ||
               !Number.isFinite(settings.cnyPerUsd) || settings.cnyPerUsd <= 0
             if (invalid) {
               setSaveError(t('invalidNumbers'))
@@ -713,24 +887,61 @@ window.__ModuleLoader__.load({
 
             setBusy(true)
             setSaveError(null)
+            setPanelNote(null)
             try {
               const result = await transport.saveSettings(settings)
               if (!result.ok) {
                 setSaveError(refusalText(result, t))
                 return
               }
-              setPanelOpen(false)
-              setNotice(result.persisted === false ? t('notPersisted') : null)
               // Show the chosen language at once instead of waiting for the row to restart.
               storeLanguage(draft.language)
               setLocalLanguage(draft.language)
               setPendingLanguage(draft.language)
               // Force an immediate read so the bar reprices without waiting for the next poll.
               setRevision(current => current + 1)
+              if (keepOpen) {
+                setPanelNote(result.persisted === false ? t('notPersisted') : t('pricesSaved'))
+                return
+              }
+              setPanelOpen(false)
+              setNotice(result.persisted === false ? t('notPersisted') : null)
             } catch {
               setSaveError(t('saveFailed'))
             } finally {
               setBusy(false)
+            }
+          }
+
+          /** Loads the published price list and fills every model row of the draft. */
+          const autoFill = async () => {
+            if (draft === null || busy || autofilling) return
+            setAutofilling(true)
+            setSaveError(null)
+            setPanelNote(null)
+            const controller = typeof AbortController === 'function' ? new AbortController() : null
+            const timer = setTimeout(() => {
+              if (controller !== null) controller.abort()
+            }, PRICING_TIMEOUT_MS)
+            try {
+              const result = await transport.fetchPricing(controller)
+              if (!result.ok) {
+                setSaveError(refusalText({ code: result.code, message: result.message }, t))
+                return
+              }
+              const rows = { ...draft.models }
+              for (const [id, plan] of Object.entries(result.models)) {
+                const base = DEFAULT_PLANS[id] !== undefined ? DEFAULT_PLANS[id] : DEFAULT_PLANS[DEFAULT_MODEL]
+                rows[id] = priceRowOf(completePlan(base, plan))
+              }
+              setDraft({ ...draft, models: rows })
+              const at = Number.isFinite(result.fetchedAt) ? new Date(result.fetchedAt) : new Date()
+              setPanelNote(`${t('autoFilled')} ${at.toLocaleString()}`)
+            } catch {
+              setSaveError(t('errFetch'))
+            } finally {
+              clearTimeout(timer)
+              setAutofilling(false)
             }
           }
 
@@ -752,14 +963,28 @@ window.__ModuleLoader__.load({
             return { ...current, peakWindows: current.peakWindows.filter((row, at) => at !== index) }
           })
 
-          const field = (key, type) => h('input', {
+          // The price fields always edit the plan of the model selected above them.
+          const selectedModel = draft !== null ? draft.model : null
+          const selectedPrices = draft !== null && selectedModel !== null && draft.models[selectedModel] !== undefined
+            ? draft.models[selectedModel]
+            : null
+
+          const priceField = (key) => h('input', {
             className: 'dts-input',
-            type: type === undefined ? 'number' : type,
-            step: type === undefined ? 'any' : undefined,
-            min: type === undefined ? '0' : undefined,
-            value: draft[key],
-            disabled: busy,
-            onChange: (event) => setDraft({ ...draft, [key]: event.target.value }),
+            type: 'number',
+            step: 'any',
+            min: '0',
+            value: selectedPrices !== null ? selectedPrices[key] : '',
+            disabled: busy || selectedPrices === null,
+            onChange: (event) => setDraft((current) => {
+              if (current === null) return current
+              const row = current.models[current.model]
+              if (row === undefined) return current
+              return {
+                ...current,
+                models: { ...current.models, [current.model]: { ...row, [key]: event.target.value } },
+              }
+            }),
           })
 
           const panel = panelOpen && draft !== null
@@ -779,22 +1004,61 @@ window.__ModuleLoader__.load({
                   h('option', { value: 'auto' }, t('langAuto')),
                   h('option', { value: 'en' }, 'English'),
                   h('option', { value: 'ru' }, 'Русский')))),
+              // One set of price fields, switched between the models; the button beside the
+              // switch writes the edited prices without closing the panel.
+              h('div', { className: 'dts-field' },
+                h('span', { className: 'dts-field-label' }, t('modelLabel')),
+                h('span', { className: 'dts-field-body' },
+                  h('select', {
+                    className: 'dts-input',
+                    value: draft.model,
+                    disabled: busy,
+                    'aria-label': t('modelLabel'),
+                    onChange: (event) => {
+                      setDraft({ ...draft, model: event.target.value })
+                      setPanelNote(null)
+                    },
+                  },
+                  Object.keys(draft.models).map(id => h('option', { key: id, value: id }, id))),
+                  h('button', {
+                    type: 'button',
+                    className: 'dts-btn dts-inline-btn',
+                    title: t('savePrices'),
+                    disabled: busy,
+                    onClick: () => persist(true),
+                  }, t('savePrices')))),
               h('div', { className: 'dts-grid' },
                 h('span', { className: 'dts-cell' }, ''),
                 h('span', { className: 'dts-col' }, t('groupPeak')),
                 h('span', { className: 'dts-col' }, t('groupOffPeak')),
                 h('span', { className: 'dts-cell' }, t('cache')),
-                field('peakCacheHit'),
-                field('offPeakCacheHit'),
+                priceField('peakCacheHit'),
+                priceField('offPeakCacheHit'),
                 h('span', { className: 'dts-cell' }, t('miss')),
-                field('peakCacheMiss'),
-                field('offPeakCacheMiss'),
+                priceField('peakCacheMiss'),
+                priceField('offPeakCacheMiss'),
                 h('span', { className: 'dts-cell' }, t('output')),
-                field('peakOutput'),
-                field('offPeakOutput')),
+                priceField('peakOutput'),
+                priceField('offPeakOutput')),
+              h('div', { className: 'dts-autofill' },
+                h('button', {
+                  type: 'button',
+                  className: 'dts-btn',
+                  title: t('autoFill'),
+                  disabled: busy || autofilling,
+                  onClick: autoFill,
+                }, autofilling ? t('autoFillBusy') : t('autoFill'))),
               h('label', { className: 'dts-field' },
                 h('span', { className: 'dts-field-label' }, t('rate')),
-                h('span', { className: 'dts-field-body' }, field('cnyPerUsd'))),
+                h('span', { className: 'dts-field-body' }, h('input', {
+                  className: 'dts-input',
+                  type: 'number',
+                  step: 'any',
+                  min: '0',
+                  value: draft.cnyPerUsd,
+                  disabled: busy,
+                  onChange: (event) => setDraft({ ...draft, cnyPerUsd: event.target.value }),
+                }))),
               h('div', { className: 'dts-block' },
                 h('div', { className: 'dts-block-label' }, t('windows')),
                 h('div', { className: 'dts-window-list' },
@@ -841,14 +1105,17 @@ window.__ModuleLoader__.load({
                   },
                   h('option', { value: 'session' }, t('scopeSession')),
                   h('option', { value: 'process' }, t('scopeAll'))))),
-              pricingCny !== null ? h('div', { className: 'dts-note' }, t('cnyNote')) : null,
+              panelNote !== null ? h('div', { className: 'dts-note' }, panelNote) : null,
               saveError !== null ? h('div', { className: 'dts-error', role: 'alert' }, saveError) : null,
               h('div', { className: 'dts-actions' },
                 h('button', {
                   type: 'button',
                   className: 'dts-btn',
                   disabled: busy,
-                  onClick: () => setDraft(draftFrom({})),
+                  onClick: () => {
+                    setDraft(draftFrom({}))
+                    setPanelNote(null)
+                  },
                 }, t('reset')),
                 h('button', {
                   type: 'button',
@@ -860,7 +1127,7 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'dts-btn dts-btn-primary',
                   disabled: busy,
-                  onClick: save,
+                  onClick: () => persist(false),
                 }, busy ? t('saving') : t('save'))))
             : null
 
@@ -898,6 +1165,10 @@ window.__ModuleLoader__.load({
               },
                 h('span', { className: 'dts-strong' }, scopedToSession ? t('scopeSession') : t('scopeAll'))),
               h('span', { key: 'sep-scope', className: 'dts-sep', 'aria-hidden': true }),
+              h('span', { key: 'model', className: 'dts-group dts-model', title: modelTitle },
+                h('span', null, t('model')),
+                h('span', { className: 'dts-strong' }, modelLabel)),
+              h('span', { key: 'sep-model', className: 'dts-sep', 'aria-hidden': true }),
               h('span', { key: 'peak', className: 'dts-group', title: t('groupPeakTitle') },
                 h('span', null, t('groupPeak')),
                 h('span', { className: 'dts-strong' }, formatTokens(peakTokens)),
@@ -914,7 +1185,7 @@ window.__ModuleLoader__.load({
                 h('span', null, t('output')),
                 h('span', { className: 'dts-strong' }, formatTokens(outputTokens))),
               h('span', { key: 'sep-3', className: 'dts-sep', 'aria-hidden': true }),
-              h('span', { key: 'cost', className: 'dts-group', title: t('costTitle') },
+              h('span', { key: 'cost', className: 'dts-group', title: costTitle },
                 h('span', null, t('cost')),
                 h('span', { className: 'dts-strong' }, `${formatMoney(money.usd, '$')} / ${formatMoney(money.cny, '¥')}`)),
               h('span', { key: 'spacer', className: 'dts-spacer', 'aria-hidden': true }),
