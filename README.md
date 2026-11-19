@@ -82,6 +82,8 @@ belong to whichever model is selected:
 | `Peak hours (UTC)` | This model's intervals billed at the full price; everything outside them is off-peak. **Add interval** adds a row, `×` removes one. Removing the last one makes the model single-price: the `Off-peak` column disappears and its prices are cleared |
 | `Scope` | Whether the bar counts the open conversation or the whole process |
 
+![The tariff settings panel: language, the model picker with Save prices, the price grid, Autofill with the DeepSeek price link, the model's own USD→CNY rate and peak hours, the scope, and the actions](docs/settings.png)
+
 **Save** writes the values through the profile's config editor, so they persist and stay visible
 in the profile patch. **Defaults** refills the form with the shipped DeepSeek prices without
 saving. Editing a config field restarts the row: the counters are rebuilt from the sessions that
@@ -244,6 +246,8 @@ Bundle ссылается на выбранную папку, поэтому `gi
 | `USD→CNY` | Курс для второй валюты — свой у каждой модели |
 | `Пиковые часы (UTC)` | Интервалы этой модели по полному тарифу; всё остальное время — непиковое. **Добавить интервал** добавляет строку, `×` убирает её. Если убрать последний интервал, модель становится однотарифной: колонка `Не пик` исчезает, а её цены обнуляются |
 | `Счёт` | Считать открытый диалог или весь процесс |
+
+![Панель настроек тарифа: язык, выбор модели с кнопкой «Записать цены», сетка цен, «Автозаполнить» со ссылкой на прайс DeepSeek, свой курс USD→CNY и свои пиковые часы модели, счёт и действия](docs/settings.png)
 
 **Сохранить** записывает значения через редактор конфигурации профиля, поэтому они сохраняются и
 остаются видны в патче профиля. **По умолчанию** заполняет форму штатными ценами DeepSeek без
