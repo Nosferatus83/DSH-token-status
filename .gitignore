@@ -1,0 +1,29 @@
+# No credentials, tokens, or environment files belong in this repository.
+# The plugin needs none: it only reads the local session log.
+.env
+.env.*
+!.env.example
+*.local
+*.local.json
+*.pem
+*.key
+*.p12
+secrets.*
+config.local.*
+
+# Dependencies and pack output
+node_modules/
+*.tgz
+pnpm-debug.log*
+npm-debug.log*
+
+# Harness profile state and logs
+.dsh/
+*.log
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

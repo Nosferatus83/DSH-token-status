@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Token status bar",
+    "description": "Full-width bar at the bottom of the window: tokens spent in the open conversation (or across the whole process) split by peak and off-peak tariff and by prompt-cache hit or miss, output tokens, and the estimated cost in USD and CNY, plus a dot that is red during peak hours and green off-peak. The interface follows the Harness language or can be pinned to English or Russian in the bar's settings.",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Token status bar">
+  <rect x="2" y="19" width="28" height="9" rx="2.5" fill="#247bbf" opacity="0.18"/>
+  <rect x="2" y="19" width="28" height="9" rx="2.5" fill="none" stroke="#247bbf" stroke-width="1.6"/>
+  <circle cx="8" cy="23.5" r="2.1" fill="#2fa66a"/>
+  <rect x="13" y="22.3" width="8.5" height="2.4" rx="1.2" fill="#247bbf" opacity="0.85"/>
+  <rect x="23.5" y="22.3" width="3" height="2.4" rx="1.2" fill="#247bbf" opacity="0.5"/>
+  <path d="M16 4.5c4.2 2.6 6.4 6 6.4 9.9 0 3.4-2.9 5.9-6.4 5.9s-6.4-2.5-6.4-5.9c0-3.9 2.2-7.3 6.4-9.9z" fill="#247bbf"/>
+  <path d="M16 8.6c2.3 1.9 3.4 4 3.4 6.1 0 2.1-1.5 3.5-3.4 3.5s-3.4-1.4-3.4-3.5c0-2.1 1.1-4.2 3.4-6.1z" fill="#ffffff" opacity="0.6"/>
+</svg>

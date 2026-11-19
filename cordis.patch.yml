@@ -1,0 +1,4 @@
+- insert:
+    - id: token-status
+      name: 'dsh-token-status'
+      config: {}
