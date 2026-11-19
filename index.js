@@ -138,23 +138,29 @@ function sanitizeSettings(raw) {
 }
 
 /**
- * Which model an event announces. `model/selection` is the model picker itself: it fires the
- * moment a session switches model, before any tokens are spent, so the bar follows the picker
- * instead of waiting for the next request. A request header repeats the selection when the
- * step starts, and the committed message says which model actually produced the usage.
+ * Which model an event belongs to, and whether the event *announces* the model in force or
+ * merely reports usage of a model that already ran.
+ *
+ * `model/selection` is the model picker itself: it fires the moment a session switches model,
+ * before any tokens are spent, so the bar follows the picker instead of waiting for the next
+ * request. A request header repeats the selection when the step starts.
+ *
+ * `assistant/message` is the opposite: it reports tokens of a step that may have started before
+ * the last switch, so it must never move the model in force — a late report from the previous
+ * model would drag the bar back to it and leave the newly selected model showing zeros.
  */
 function modelOfEvent(event, data) {
-  if (event.type === 'model/selection') return normalizeModelId(data.model)
+  if (event.type === 'model/selection') return { model: normalizeModelId(data.model), announced: true }
   if (event.type === 'request/header') {
     const header = data.header
     const config = header !== null && typeof header === 'object' ? header.config : undefined
-    return normalizeModelId(config !== null && typeof config === 'object' ? config.model : undefined)
+    return { model: normalizeModelId(config !== null && typeof config === 'object' ? config.model : undefined), announced: true }
   }
-  if (event.type === 'request/context') return normalizeModelId(data.model)
+  if (event.type === 'request/context') return { model: normalizeModelId(data.model), announced: true }
   if (event.type === 'assistant/message') {
     const message = data.message
     const source = message !== null && typeof message === 'object' ? message.source : undefined
-    return normalizeModelId(source !== null && typeof source === 'object' ? source.model : undefined)
+    return { model: normalizeModelId(source !== null && typeof source === 'object' ? source.model : undefined), announced: false }
   }
   return undefined
 }
@@ -180,7 +186,7 @@ export function apply(ctx, rawConfig) {
   function entryOf(sessionId) {
     let entry = perSession.get(sessionId)
     if (entry === undefined) {
-      entry = { model: undefined, models: new Map() }
+      entry = { model: undefined, announced: false, models: new Map() }
       perSession.set(sessionId, entry)
     }
     return entry
@@ -196,9 +202,12 @@ export function apply(ctx, rawConfig) {
     return buckets
   }
 
+  /** Moves the model in force; only an announcement (picker or request header) may do that. */
   function setSessionModel(sessionId, model) {
     if (model === undefined) return
-    entryOf(sessionId).model = model
+    const entry = entryOf(sessionId)
+    entry.model = model
+    entry.announced = true
   }
 
   function recordUsage(sessionId, usage, timeMs, model) {
@@ -206,7 +215,8 @@ export function apply(ctx, rawConfig) {
     if (!Number.isFinite(timeMs)) return
     const entry = entryOf(sessionId)
     const modelId = model !== undefined ? model : (entry.model !== undefined ? entry.model : config.defaultModel)
-    entry.model = modelId
+    // A log written before selections and headers were recorded only has messages to go on.
+    if (!entry.announced) entry.model = modelId
     const tariff = isPeak(timeMs, config) ? 'peak' : 'offPeak'
     addUsage(bucketsOf(sessionId, modelId)[tariff], usage)
   }
@@ -218,8 +228,8 @@ export function apply(ctx, rawConfig) {
     const sessionId = session !== null && typeof session === 'object' ? session.id : undefined
     if (typeof sessionId !== 'string') return
 
-    const announced = modelOfEvent(event, data)
-    if (announced !== undefined) setSessionModel(sessionId, announced)
+    const found = modelOfEvent(event, data)
+    if (found !== undefined && found.announced === true) setSessionModel(sessionId, found.model)
 
     if (event.type === 'step/start') {
       stepStarts.set(sessionKey(sessionId, data.turn, data.step), plausibleTime(event.time, Date.now()))
@@ -235,7 +245,7 @@ export function apply(ctx, rawConfig) {
     recordUsage(sessionId, data.usage, plausibleTime(
       startedAtStep !== undefined ? startedAtStep : event.time,
       Date.now(),
-    ), announced)
+    ), found !== undefined ? found.model : undefined)
   }
 
   // Sessions that were already live when this plugin loaded keep their recorded spend.
@@ -248,6 +258,7 @@ export function apply(ctx, rawConfig) {
       } catch {
         events = []
       }
+      if (!Array.isArray(events)) events = []
       for (const event of events) foldEvent(session, event)
     }
   }

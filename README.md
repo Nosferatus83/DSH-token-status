@@ -123,7 +123,8 @@ switches model mid-conversation keeps a separate pair of buckets per model, and 
 the model picker the moment you switch — the model's `model/selection` event is recorded before
 any tokens are spent. The counters then show that model's spend (zero until it runs), while the
 earlier model's tokens stay in the per-model breakdown of the badge tooltip and in the process
-total.
+total. A step that was already running when you switched still reports its tokens to the model
+that produced them, and that report never drags the bar back to the previous model.
 
 The plan is described by its **peak** intervals, so a plan with two expensive windows a day is
 two `peakWindows` entries. A config written the other way round (with `offPeakWindows`) is still
@@ -268,7 +269,8 @@ Markdown, затем ту же страницу как HTML. Результат 
 хранит отдельную пару счётчиков на каждую модель, а полоса переключается на выбранную модель сразу
 — DSH пишет событие `model/selection` ещё до траты токенов. Счётчики показывают расход этой модели
 (ноль, пока она не работала), а токены прежней модели остаются в разбивке по моделям в подсказке
-метки и в общем итоге процесса.
+метки и в общем итоге процесса. Шаг, начатый до переключения, всё равно относит свои токены к той
+модели, которая их потратила, и этот отчёт не возвращает полосу к прежней модели.
 
 План описывается **пиковыми** интервалами: план с двумя дорогими окнами в сутки — это две записи
 `peakWindows`. Конфигурация, записанная наоборот (через `offPeakWindows`), один раз читается и
