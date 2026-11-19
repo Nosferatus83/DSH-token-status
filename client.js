@@ -919,6 +919,9 @@ window.__ModuleLoader__.load({
             const modelTokens = modelView.tokens !== null && typeof modelView.tokens === 'object'
               ? modelView.tokens.total
               : 0
+            const priced = !(modelView.cost !== null && typeof modelView.cost === 'object' &&
+              modelView.cost.enabled === false)
+            if (!priced) return `${id}: ${formatTokens(modelTokens)}`
             const modelMoney = modelView.cost !== null && typeof modelView.cost === 'object'
               ? modelView.cost
               : { usd: 0, cny: 0 }
