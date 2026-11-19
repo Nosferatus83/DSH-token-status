@@ -138,11 +138,13 @@ function sanitizeSettings(raw) {
 }
 
 /**
- * Which model an event announces. A request header carries the model before any tokens are
- * spent, so a switch shows up in the bar as soon as the next step starts; the committed
- * message repeats it, and a log written before headers were recorded still has that field.
+ * Which model an event announces. `model/selection` is the model picker itself: it fires the
+ * moment a session switches model, before any tokens are spent, so the bar follows the picker
+ * instead of waiting for the next request. A request header repeats the selection when the
+ * step starts, and the committed message says which model actually produced the usage.
  */
 function modelOfEvent(event, data) {
+  if (event.type === 'model/selection') return normalizeModelId(data.model)
   if (event.type === 'request/header') {
     const header = data.header
     const config = header !== null && typeof header === 'object' ? header.config : undefined

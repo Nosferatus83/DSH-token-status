@@ -21,7 +21,7 @@ The bar spans the whole width at the bottom of the window:
 |---|---|
 | Dot and tariff label | The tariff in force now — red `Peak`, green `Off-peak` — plus the local clock time when it flips |
 | `session` / `all` | Scope: the open conversation, or every session in the process when no conversation is open |
-| `model` | The model the counters and the cost belong to — `deepseek-flash`, `deepseek-v4-pro`, or `all models` for the process total |
+| `model` | The model the counters and the cost belong to — `deepseek-flash`, `deepseek-v4-pro`, or `all models` for the process total. Switching the model picker switches the bar at once; the tooltip lists the spend of every model in scope |
 | `Peak` / `Off-peak` | Tokens billed under each tariff, with prompt-cache hits and misses in brackets |
 | `output` | Output tokens across both tariffs |
 | `cost` | Estimated charge in USD and CNY, priced by the plan of the model shown |
@@ -120,7 +120,10 @@ Each usage report is billed by the tariff in force when its step **started**, so
 runs across the boundary lands in the bucket it was charged in. A cache write is priced as a
 missed prompt token. The cost of a model is computed from that model's own plan: a session that
 switches model mid-conversation keeps a separate pair of buckets per model, and the bar follows
-the model in force as soon as the next request announces it.
+the model picker the moment you switch — the model's `model/selection` event is recorded before
+any tokens are spent. The counters then show that model's spend (zero until it runs), while the
+earlier model's tokens stay in the per-model breakdown of the badge tooltip and in the process
+total.
 
 The plan is described by its **peak** intervals, so a plan with two expensive windows a day is
 two `peakWindows` entries. A config written the other way round (with `offPeakWindows`) is still
@@ -164,7 +167,7 @@ shape.
 |---|---|
 | Кружок и название тарифа | Действующий тариф — красный `Пиковый час`, зелёный `Непиковый час` — и местное время, когда он сменится |
 | `сессия` / `всё` | Что считается: открытый диалог или все сессии процесса, когда диалог не открыт |
-| `модель` | Модель, к которой относятся счётчики и стоимость: `deepseek-flash`, `deepseek-v4-pro` или `все модели` для всего процесса |
+| `модель` | Модель, к которой относятся счётчики и стоимость: `deepseek-flash`, `deepseek-v4-pro` или `все модели` для всего процесса. Переключение модели в селекторе сразу переключает полосу; в подсказке — расход каждой модели в области счёта |
 | `Пик` / `Не пик` | Токены по каждому тарифу, в скобках — попадания в кэш и промахи |
 | `выход` | Выходные токены по обоим тарифам |
 | `стоимость` | Оценка в USD и CNY по тарифу показанной модели |
@@ -262,8 +265,10 @@ Markdown, затем ту же страницу как HTML. Результат 
 Каждый отчёт о расходе относится к тарифу, действовавшему в момент **начала** шага, поэтому запрос
 через границу попадает в тот тариф, по которому списан. Запись в кэш оценивается как промах.
 Стоимость модели считается по её собственному плану: сессия, сменившая модель посреди диалога,
-хранит отдельную пару счётчиков на каждую модель, а полоса переключается на действующую модель,
-как только об этом сообщает следующий запрос.
+хранит отдельную пару счётчиков на каждую модель, а полоса переключается на выбранную модель сразу
+— DSH пишет событие `model/selection` ещё до траты токенов. Счётчики показывают расход этой модели
+(ноль, пока она не работала), а токены прежней модели остаются в разбивке по моделям в подсказке
+метки и в общем итоге процесса.
 
 План описывается **пиковыми** интервалами: план с двумя дорогими окнами в сутки — это две записи
 `peakWindows`. Конфигурация, записанная наоборот (через `offPeakWindows`), один раз читается и

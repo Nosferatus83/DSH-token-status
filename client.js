@@ -771,9 +771,26 @@ window.__ModuleLoader__.load({
           const modelLabel = scopedToSession
             ? (displayModel !== null ? displayModel : t('allModels'))
             : t('allModels')
-          const modelTitle = scopedToSession && displayModel !== null
-            ? `${t('modelTitle')}: ${displayModel}`
-            : t('allModelsTitle')
+
+          // Switching the model changes which counters the bar shows, so the badge explains where
+          // the other model's spend went instead of leaving the drop to zero unexplained.
+          const perModelEntries = view !== null && view.perModel !== null && typeof view.perModel === 'object'
+            ? Object.entries(view.perModel)
+            : []
+          const perModelLines = perModelEntries.map(([id, modelView]) => {
+            const modelTokens = modelView.tokens !== null && typeof modelView.tokens === 'object'
+              ? modelView.tokens.total
+              : 0
+            const modelMoney = modelView.cost !== null && typeof modelView.cost === 'object'
+              ? modelView.cost
+              : { usd: 0, cny: 0 }
+            return `${id}: ${formatTokens(modelTokens)} · ${formatMoney(modelMoney.usd, '$')} / ${formatMoney(modelMoney.cny, '¥')}`
+          })
+          const modelTitle = [
+            scopedToSession
+              ? `${t('modelTitle')}${displayModel !== null ? `: ${displayModel}` : ''}`
+              : t('allModelsTitle'),
+          ].concat(perModelLines).join('\n')
 
           const peak = bucketOf(view, 'peak')
           const offPeak = bucketOf(view, 'offPeak')
@@ -788,17 +805,8 @@ window.__ModuleLoader__.load({
             ? processView.tokens.total
             : 0
 
-          // When several models share the view, the tooltip spells their charges out.
-          const perModelEntries = view !== null && view.perModel !== null && typeof view.perModel === 'object'
-            ? Object.entries(view.perModel)
-            : []
           const costTitle = perModelEntries.length > 1
-            ? [t('costTitle')].concat(perModelEntries.map(([id, modelView]) => {
-              const modelMoney = modelView.cost !== null && typeof modelView.cost === 'object'
-                ? modelView.cost
-                : { usd: 0, cny: 0 }
-              return `${id}: ${formatMoney(modelMoney.usd, '$')} / ${formatMoney(modelMoney.cny, '¥')}`
-            })).join('\n')
+            ? [t('costTitle')].concat(perModelLines).join('\n')
             : t('costTitle')
 
           // Dismiss the settings panel on an outside press or Escape.
