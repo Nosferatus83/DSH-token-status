@@ -15,7 +15,12 @@ window.__ModuleLoader__.load({
     const PRICING_TIMEOUT_MS = 30000
     const ROUTE = '/token-status/snapshot'
     const SETTINGS_ROUTE = '/token-status/settings'
+    const MODELS_ROUTE = '/token-status/models'
     const PRICING_ROUTE = '/token-status/pricing/refresh'
+    /** The published DeepSeek price list, offered beside Autofill for a DeepSeek model. */
+    const PRICING_DOCS_URL = 'https://api-docs.deepseek.com/quick_start/pricing'
+    /** A model catalog older than this is refreshed when the panel opens again. */
+    const CATALOG_TTL_MS = 60000
 
     /**
      * Mirrors the Host catalog so the dot, the cost and the form work before the first
@@ -68,18 +73,23 @@ window.__ModuleLoader__.load({
         allModelsTitle: 'Every session in this process, each model priced by its own plan',
         settingsButton: 'Tariff settings',
         settingsTitle: 'Tariff settings',
-        settingsHint: 'Prices per 1,000,000 tokens in USD, one plan per model. Peak hours are UTC; everything outside them is off-peak.',
+        settingsHint: 'Prices per 1,000,000 tokens in USD, one plan per model. The model list comes from this Harness; peak hours and the USD→CNY rate belong to the model selected below.',
         modelLabel: 'Model',
         savePrices: 'Save prices',
         pricesSaved: 'Prices saved.',
         autoFill: 'Autofill',
         autoFillBusy: 'Fetching…',
         autoFilled: 'Prices loaded from the DeepSeek docs — save them with “Save prices”.',
+        pricingDocs: 'DeepSeek pricing',
+        pricingDocsTitle: 'Open the published DeepSeek price list in a new tab',
+        otherProviders: 'Saved models',
+        singleTariff: 'single tariff',
+        singleTariffTitle: 'This model has no peak hours, so every token is billed at one price',
         rate: 'USD→CNY',
         windows: 'Peak hours (UTC)',
         addWindow: 'Add interval',
         removeWindow: 'Remove interval',
-        noWindows: 'Set at least one peak interval.',
+        noWindows: 'No peak intervals: one price for the whole day, off-peak prices are cleared.',
         scopeLabel: 'Scope',
         save: 'Save',
         cancel: 'Cancel',
@@ -126,18 +136,23 @@ window.__ModuleLoader__.load({
         allModelsTitle: 'Все сессии процесса, каждая модель — по своему тарифу',
         settingsButton: 'Настройки тарифа',
         settingsTitle: 'Настройки тарифа',
-        settingsHint: 'Цены за 1 000 000 токенов в USD, свой план на каждую модель. Пиковые часы — UTC; всё остальное время непиковое.',
+        settingsHint: 'Цены за 1 000 000 токенов в USD, свой план на каждую модель. Список моделей берётся из этого Harness; пиковые часы и курс USD→CNY относятся к выбранной ниже модели.',
         modelLabel: 'Модель',
         savePrices: 'Записать цены',
         pricesSaved: 'Цены записаны.',
         autoFill: 'Автозаполнить',
         autoFillBusy: 'Загружаю…',
         autoFilled: 'Цены получены из документации DeepSeek — сохраните их кнопкой «Записать цены».',
+        pricingDocs: 'Прайс DeepSeek',
+        pricingDocsTitle: 'Открыть опубликованный прайс DeepSeek в новой вкладке',
+        otherProviders: 'Сохранённые модели',
+        singleTariff: 'единый тариф',
+        singleTariffTitle: 'У этой модели не заданы пиковые часы, поэтому все токены считаются по одной цене',
         rate: 'USD→CNY',
         windows: 'Пиковые часы (UTC)',
         addWindow: 'Добавить интервал',
         removeWindow: 'Убрать интервал',
-        noWindows: 'Задайте хотя бы один пиковый интервал.',
+        noWindows: 'Пиковых интервалов нет: одна цена на весь день, цены «Не пик» обнуляются.',
         scopeLabel: 'Счёт',
         save: 'Сохранить',
         cancel: 'Отмена',
@@ -211,6 +226,7 @@ window.__ModuleLoader__.load({
 .dts-panel-title{font-size:12px;font-weight:600;margin-bottom:2px}
 .dts-panel-hint{color:var(--dsw-alias-label-secondary);margin-bottom:10px}
 .dts-grid{display:grid;grid-template-columns:44px 1fr 1fr;gap:6px 8px;align-items:center}
+.dts-grid-single{grid-template-columns:44px 1fr}
 .dts-col{color:var(--dsw-alias-label-secondary);text-align:center}
 .dts-cell{color:var(--dsw-alias-label-secondary)}
 .dts-input{width:100%;height:24px;box-sizing:border-box;padding:0 6px;border-radius:4px;
@@ -234,6 +250,9 @@ window.__ModuleLoader__.load({
 .dts-add{align-self:flex-start;height:22px;font-size:10px;padding:0 8px;color:var(--dsw-alias-label-secondary)}
 .dts-autofill{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
 .dts-autofill .dts-note-inline{flex:1 1 150px;min-width:0}
+.dts-link{color:var(--dsw-alias-brand-primary);font-size:10px;text-decoration:none;white-space:nowrap;flex:0 0 auto}
+.dts-link:hover{text-decoration:underline}
+.dts-link:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .dts-note{margin-top:8px;color:var(--dsw-alias-label-secondary)}
 .dts-note-inline{color:var(--dsw-alias-label-secondary)}
 .dts-error{margin-top:8px;color:var(--dsw-alias-state-error-primary)}
@@ -252,20 +271,40 @@ window.__ModuleLoader__.load({
       return match === null ? fallback : Number(match[1]) * 60 + Number(match[2])
     }
 
-    function normaliseWindows(raw) {
+    /** Every valid interval of one list, in minutes; an explicitly empty list stays empty. */
+    function parseWindowsList(raw) {
       const windows = []
-      for (const candidate of Array.isArray(raw) ? raw : DEFAULT_PEAK_WINDOWS) {
+      for (const candidate of Array.isArray(raw) ? raw : []) {
         if (candidate === null || typeof candidate !== 'object') continue
         const from = minuteOfDay(candidate.from, -1)
         const to = minuteOfDay(candidate.to, -1)
         if (from < 0 || to < 0 || from === to) continue
         windows.push({ from, to })
       }
-      if (windows.length > 0) return windows
-      return DEFAULT_PEAK_WINDOWS.map(window => ({
-        from: minuteOfDay(window.from, 0),
-        to: minuteOfDay(window.to, 0),
-      }))
+      return windows
+    }
+
+    /**
+     * The peak intervals of `model`, in minutes. A model that names its own list keeps it even
+     * when it is empty — that is a model without an off-peak tariff. Anything else uses the
+     * row-level list, and a snapshot without one at all falls back to the shipped hours.
+     */
+    function modelWindowsOf(config, model) {
+      const source = config !== null && typeof config === 'object' ? config : {}
+      const models = source.models !== null && typeof source.models === 'object' ? source.models : null
+      const entry = models !== null && typeof model === 'string' ? models[model] : undefined
+      if (entry !== undefined && Array.isArray(entry.peakWindows)) return parseWindowsList(entry.peakWindows)
+      if (Array.isArray(source.peakWindows)) return parseWindowsList(source.peakWindows)
+      return parseWindowsList(DEFAULT_PEAK_WINDOWS)
+    }
+
+    /** The USD→CNY rate of `model`, falling back to the row-level one. */
+    function rateOf(config, model) {
+      const source = config !== null && typeof config === 'object' ? config : {}
+      const models = source.models !== null && typeof source.models === 'object' ? source.models : null
+      const entry = models !== null && typeof model === 'string' ? models[model] : undefined
+      if (entry !== undefined && Number.isFinite(entry.cnyPerUsd) && entry.cnyPerUsd > 0) return entry.cnyPerUsd
+      return Number.isFinite(source.cnyPerUsd) && source.cnyPerUsd > 0 ? source.cnyPerUsd : DEFAULT_RATE
     }
 
     /** True while the full tariff applies, i.e. now is inside one peak interval. */
@@ -401,13 +440,15 @@ window.__ModuleLoader__.load({
      * Both currencies for one view. The Host already priced every model by its own plan, so
      * its `cost` is authoritative; the local calculation only covers a snapshot without one.
      */
-    function moneyOf(view, plans, config, rate) {
+    function moneyOf(view, plans, config) {
+      const model = view !== null && view !== undefined ? view.model : undefined
       if (view !== null && view !== undefined && view.cost !== null && typeof view.cost === 'object' &&
         Number.isFinite(view.cost.usd)) {
         const usd = view.cost.usd
-        return { usd, cny: Number.isFinite(view.cost.cny) ? view.cost.cny : usd * rate }
+        return { usd, cny: Number.isFinite(view.cost.cny) ? view.cost.cny : usd * rateOf(config, model) }
       }
-      const plan = planOf(plans, config, view !== null && view !== undefined ? view.model : undefined)
+      const plan = planOf(plans, config, model)
+      const rate = rateOf(config, model)
       const peak = bucketOf(view, 'peak')
       const offPeak = bucketOf(view, 'offPeak')
       const usd = costOfBuckets(peak, plan, 'peak') + costOfBuckets(offPeak, plan, 'offPeak')
@@ -416,6 +457,12 @@ window.__ModuleLoader__.load({
 
     function textOfPrice(value, fallback) {
       return Number.isFinite(value) ? String(value) : String(fallback)
+    }
+
+    /** A plan whose every price is zero: "count tokens, do not price them". */
+    const ZERO_PLAN = {
+      peak: { cacheHit: 0, cacheMiss: 0, output: 0 },
+      offPeak: { cacheHit: 0, cacheMiss: 0, output: 0 },
     }
 
     /** The form's string-valued price row for one plan. */
@@ -430,10 +477,42 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** The peak intervals of `model` as the form's `HH:MM` rows. */
+    function windowsTextOf(config, model) {
+      const source = config !== null && typeof config === 'object' ? config : {}
+      const models = source.models !== null && typeof source.models === 'object' ? source.models : null
+      const entry = models !== null && typeof model === 'string' ? models[model] : undefined
+      const raw = entry !== undefined && Array.isArray(entry.peakWindows)
+        ? entry.peakWindows
+        : (Array.isArray(source.peakWindows) ? source.peakWindows : DEFAULT_PEAK_WINDOWS)
+      const rows = []
+      for (const candidate of raw) {
+        if (candidate === null || typeof candidate !== 'object') continue
+        if (typeof candidate.from !== 'string' || typeof candidate.to !== 'string') continue
+        rows.push({ from: candidate.from, to: candidate.to })
+      }
+      return rows
+    }
+
     /**
-     * Turns the snapshot config into the form's string-valued draft. The plan is described
-     * by its peak intervals, so the form always offers two rows: the second stays empty
-     * until a plan really has a second expensive window.
+     * A complete form row for a model the profile does not price yet. A DeepSeek model starts
+     * from the published peak hours; another provider's model starts with no peak interval,
+     * i.e. one price for the whole day, which is what such a route usually has.
+     */
+    function blankRowOf(model, deepseek) {
+      const plan = DEFAULT_PLANS[model] !== undefined ? DEFAULT_PLANS[model] : ZERO_PLAN
+      const row = priceRowOf(plan)
+      row.cnyPerUsd = textOfPrice(DEFAULT_RATE, DEFAULT_RATE)
+      row.peakWindows = deepseek === false
+        ? []
+        : DEFAULT_PEAK_WINDOWS.map(window => ({ from: window.from, to: window.to }))
+      return row
+    }
+
+    /**
+     * Turns the snapshot config into the form's draft. Prices, peak intervals and the rate
+     * all belong to a model, so the draft keeps one row per model and the panel shows the
+     * row of whichever model is selected.
      */
     function draftFrom(config) {
       const source = config !== null && typeof config === 'object' ? config : {}
@@ -444,30 +523,70 @@ window.__ModuleLoader__.load({
         : modelIds[0]
 
       const rows = {}
-      for (const [id, plan] of Object.entries(plans)) rows[id] = priceRowOf(plan)
-
-      const windows = []
-      for (const candidate of Array.isArray(source.peakWindows) ? source.peakWindows : []) {
-        if (candidate === null || typeof candidate !== 'object') continue
-        windows.push({
-          from: typeof candidate.from === 'string' ? candidate.from : '',
-          to: typeof candidate.to === 'string' ? candidate.to : '',
-        })
+      for (const [id, plan] of Object.entries(plans)) {
+        const row = priceRowOf(plan)
+        row.cnyPerUsd = textOfPrice(rateOf(source, id), DEFAULT_RATE)
+        row.peakWindows = windowsTextOf(source, id)
+        rows[id] = row
       }
-      if (windows.length === 0) {
-        windows.push({ from: DEFAULT_PEAK_WINDOWS[0].from, to: DEFAULT_PEAK_WINDOWS[0].to })
-      }
-      while (windows.length < 2) windows.push({ from: '', to: '' })
 
       return {
         model: selected,
         models: rows,
-        cnyPerUsd: textOfPrice(source.cnyPerUsd, DEFAULT_RATE),
-        peakWindows: windows,
         scope: source.scope === 'process' ? 'process' : 'session',
         language: source.language === 'en' || source.language === 'ru' ? source.language : 'auto',
       }
     }
+
+    /**
+     * The models the settings panel offers: whatever this Harness can route to, grouped by
+     * provider, plus rows saved in the profile that the catalog does not mention. A model id
+     * is the key of its plan, so a duplicate across providers appears once.
+     */
+    function availableModelsOf(catalog, rows) {
+      const groups = []
+      const seen = new Set()
+      const catalogGroups = catalog !== null && typeof catalog === 'object' && Array.isArray(catalog.groups)
+        ? catalog.groups
+        : []
+      for (const group of catalogGroups) {
+        if (group === null || typeof group !== 'object' || !Array.isArray(group.models)) continue
+        const providerName = typeof group.name === 'string' && group.name !== '' ? group.name : null
+        const providerId = typeof group.id === 'string' ? group.id : ''
+        const models = group.models
+          .filter(model => model !== null && typeof model === 'object' &&
+            typeof model.id === 'string' && model.id !== '' && !seen.has(model.id))
+          .map((model) => {
+            seen.add(model.id)
+            return {
+              id: model.id,
+              name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id,
+              provider: providerId,
+              providerName,
+              deepseek: model.deepseek === true || group.deepseek === true,
+            }
+          })
+        if (models.length > 0) {
+          groups.push({ id: providerId, name: providerName, configured: group.id === 'configured', models })
+        }
+      }
+
+      // Saved rows stay selectable when no provider advertises them (catalog failure or a
+      // provider that is not mounted right now). The id marks the DeepSeek family.
+      const extra = []
+      for (const id of Object.keys(rows !== null && typeof rows === 'object' ? rows : {})) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        extra.push({ id, name: id, provider: '', providerName: null, deepseek: /^deepseek/i.test(id) })
+      }
+      if (extra.length > 0) {
+        const configured = groups.find(group => group.configured === true)
+        if (configured !== undefined) configured.models.push(...extra)
+        else groups.push({ id: 'saved', name: null, configured: true, models: extra })
+      }
+      return groups
+    }
+
 
     /**
      * Reads and writes this package's Host half over its authenticated same-origin routes.
@@ -507,6 +626,29 @@ window.__ModuleLoader__.load({
             ? body.code
             : undefined
           return { ok: false, message, code }
+        },
+        /** Lists the models this Harness can route to; a broken answer is not fatal. */
+        async models(controller) {
+          try {
+            const response = await fetch(MODELS_ROUTE, {
+              credentials: 'same-origin',
+              cache: 'no-store',
+              headers: { accept: 'application/json' },
+              signal: controller !== null && controller !== undefined ? controller.signal : undefined,
+            })
+            const body = await response.json().catch(() => null)
+            if (body !== null && typeof body === 'object' && body.ok === true && Array.isArray(body.groups)) {
+              return {
+                ok: true,
+                groups: body.groups,
+                failures: Array.isArray(body.failures) ? body.failures : [],
+                fetchedAt: Number.isFinite(body.fetchedAt) ? body.fetchedAt : Date.now(),
+              }
+            }
+            return { ok: false }
+          } catch {
+            return { ok: false }
+          }
         },
         /** Asks the Host to load the published price list; the Host owns the network. */
         async fetchPricing(controller) {
@@ -710,6 +852,8 @@ window.__ModuleLoader__.load({
           const [draft, setDraft] = React.useState(null)
           const [busy, setBusy] = React.useState(false)
           const [autofilling, setAutofilling] = React.useState(false)
+          const [catalog, setCatalog] = React.useState(null)
+          const [catalogBusy, setCatalogBusy] = React.useState(false)
           const [saveError, setSaveError] = React.useState(null)
           const [panelNote, setPanelNote] = React.useState(null)
           const [notice, setNotice] = React.useState(null)
@@ -741,13 +885,7 @@ window.__ModuleLoader__.load({
             }
           }, [pendingLanguage, configLanguage, localLanguage])
 
-          const windows = normaliseWindows(config.peakWindows)
           const plans = plansOf(config)
-          const rate = Number.isFinite(config.cnyPerUsd) ? config.cnyPerUsd : DEFAULT_RATE
-
-          const peakNow = isPeakNow(now, windows)
-          const boundary = nextBoundary(now, windows)
-          const remaining = boundary !== null ? formatRemaining(boundary - now) : ''
 
           // The open Conversation is the interesting scope; the process total stays on the right.
           // A Host half from an earlier generation answered without `process`/`session`; read
@@ -792,14 +930,33 @@ window.__ModuleLoader__.load({
               : t('allModelsTitle'),
           ].concat(perModelLines).join('\n')
 
+          // Peak hours belong to a model, so the tariff indicator follows the model the counters
+          // belong to — the session's model, or this row's default model for the process total.
+          // A model with no peak interval at all has one price: no countdown, and the off-peak
+          // half of the bar is hidden instead of showing a tariff that never applies.
+          const tariffModel = scopedToSession
+            ? displayModel
+            : (typeof config.defaultModel === 'string' && config.defaultModel !== '' ? config.defaultModel : null)
+          const windows = modelWindowsOf(config, tariffModel)
+          const singleTariff = windows.length === 0
+          const peakNow = singleTariff ? true : isPeakNow(now, windows)
+          const boundary = singleTariff ? null : nextBoundary(now, windows)
+          const remaining = boundary !== null ? formatRemaining(boundary - now) : ''
+
           const peak = bucketOf(view, 'peak')
           const offPeak = bucketOf(view, 'offPeak')
           const peakTokens = tokensOf(peak)
           const offPeakTokens = tokensOf(offPeak)
           const outputTokens = peak.output + offPeak.output
           const money = view !== null
-            ? moneyOf(view, plans, config, rate)
+            ? moneyOf(view, plans, config)
             : { usd: 0, cny: 0 }
+          // The Host decides what the counters of this model are worth at all: a model with
+          // every price at zero is counted in tokens only, and one without peak hours has no
+          // off-peak half to show.
+          const showOffPeak = !(view !== null && view.hasOffPeak === false)
+          const showCost = !(view !== null && view.cost !== null && typeof view.cost === 'object' &&
+            view.cost.enabled === false)
           const processTokens = processView !== null && processView.tokens !== null &&
             typeof processView.tokens === 'object' && Number.isFinite(processView.tokens.total)
             ? processView.tokens.total
@@ -827,6 +984,20 @@ window.__ModuleLoader__.load({
             }
           }, [panelOpen])
 
+          /** Reads the models this Harness can route to; a failure leaves the saved rows usable. */
+          const loadCatalog = async () => {
+            if (catalogBusy) return
+            setCatalogBusy(true)
+            try {
+              const result = await transport.models(null)
+              if (result.ok) setCatalog(result)
+            } catch {
+              /* the rows already saved in the profile stay the list */
+            } finally {
+              setCatalogBusy(false)
+            }
+          }
+
           const openPanel = () => {
             if (panelOpen) {
               setPanelOpen(false)
@@ -836,6 +1007,11 @@ window.__ModuleLoader__.load({
             setSaveError(null)
             setPanelNote(null)
             setPanelOpen(true)
+            // The model list is the one this Harness shows in its own settings; read it when
+            // the panel opens and let the Host reuse its answer for a while.
+            const stale = catalog === null || !Number.isFinite(catalog.fetchedAt) ||
+              Date.now() - catalog.fetchedAt > CATALOG_TTL_MS
+            if (stale) void loadCatalog()
           }
 
           const numeric = (text) => {
@@ -843,32 +1019,45 @@ window.__ModuleLoader__.load({
             return Number.isFinite(parsed) ? parsed : Number.NaN
           }
 
-          /** Every model plan plus the shared constants, in the payload the Host validates. */
+          const windowRowsOf = (row) => (Array.isArray(row.peakWindows) ? row.peakWindows : [])
+            .filter(window => window !== null && typeof window === 'object' &&
+              typeof window.from === 'string' && window.from !== '' &&
+              typeof window.to === 'string' && window.to !== '')
+            .map(window => ({ from: window.from, to: window.to }))
+
+          /**
+           * Every model's plan — prices, its own peak intervals and its own rate — plus the two
+           * constants that stay row-level. A model with no peak interval has no off-peak price:
+           * its off-peak half travels as zeros so the Host never bills a tariff that cannot
+           * happen. The top-level pair mirrors the selected model for older readers.
+           */
           const settingsOf = (current) => {
             const models = {}
             for (const [id, row] of Object.entries(current.models)) {
+              const windows = windowRowsOf(row)
               models[id] = {
                 peak: {
                   cacheHit: numeric(row.peakCacheHit),
                   cacheMiss: numeric(row.peakCacheMiss),
                   output: numeric(row.peakOutput),
                 },
-                offPeak: {
-                  cacheHit: numeric(row.offPeakCacheHit),
-                  cacheMiss: numeric(row.offPeakCacheMiss),
-                  output: numeric(row.offPeakOutput),
-                },
+                offPeak: windows.length === 0
+                  ? { cacheHit: 0, cacheMiss: 0, output: 0 }
+                  : {
+                    cacheHit: numeric(row.offPeakCacheHit),
+                    cacheMiss: numeric(row.offPeakCacheMiss),
+                    output: numeric(row.offPeakOutput),
+                  },
+                peakWindows: windows,
+                cnyPerUsd: numeric(row.cnyPerUsd),
               }
             }
+            const selected = current.models[current.model] !== undefined ? current.models[current.model] : null
             return {
               models,
               defaultModel: current.model,
-              cnyPerUsd: numeric(current.cnyPerUsd),
-              peakWindows: current.peakWindows
-                .filter(row => row !== null && typeof row === 'object' &&
-                  typeof row.from === 'string' && row.from !== '' &&
-                  typeof row.to === 'string' && row.to !== '')
-                .map(row => ({ from: row.from, to: row.to })),
+              cnyPerUsd: selected !== null ? numeric(selected.cnyPerUsd) : Number.NaN,
+              peakWindows: selected !== null ? windowRowsOf(selected) : [],
               scope: current.scope,
               language: current.language,
             }
@@ -878,18 +1067,15 @@ window.__ModuleLoader__.load({
           const persist = async (keepOpen) => {
             if (draft === null || busy) return
             const settings = settingsOf(draft)
-            const prices = Object.values(settings.models).flatMap(plan => [plan.peak, plan.offPeak])
+            const plans = Object.values(settings.models)
+            const prices = plans.flatMap(plan => [plan.peak, plan.offPeak])
             const invalid = prices.length === 0 || prices.some(price =>
               !Number.isFinite(price.cacheHit) || price.cacheHit < 0 ||
               !Number.isFinite(price.cacheMiss) || price.cacheMiss < 0 ||
               !Number.isFinite(price.output) || price.output < 0) ||
-              !Number.isFinite(settings.cnyPerUsd) || settings.cnyPerUsd <= 0
+              plans.some(plan => !Number.isFinite(plan.cnyPerUsd) || plan.cnyPerUsd <= 0)
             if (invalid) {
               setSaveError(t('invalidNumbers'))
-              return
-            }
-            if (settings.peakWindows.length === 0) {
-              setSaveError(t('noWindows'))
               return
             }
 
@@ -940,7 +1126,12 @@ window.__ModuleLoader__.load({
               const rows = { ...draft.models }
               for (const [id, plan] of Object.entries(result.models)) {
                 const base = DEFAULT_PLANS[id] !== undefined ? DEFAULT_PLANS[id] : DEFAULT_PLANS[DEFAULT_MODEL]
-                rows[id] = priceRowOf(completePlan(base, plan))
+                const filled = priceRowOf(completePlan(base, plan))
+                // Prices only: the model keeps its own peak intervals and rate.
+                const existing = rows[id]
+                rows[id] = existing !== undefined
+                  ? { ...existing, ...filled }
+                  : { ...blankRowOf(id), ...filled }
               }
               setDraft({ ...draft, models: rows })
               const at = Number.isFinite(result.fetchedAt) ? new Date(result.fetchedAt) : new Date()
@@ -953,29 +1144,83 @@ window.__ModuleLoader__.load({
             }
           }
 
-          const updateWindow = (index, key, value) => setDraft((current) => {
+          /** Writes one field of the selected model's row. */
+          const updateRow = (patch) => setDraft((current) => {
             if (current === null) return current
+            const row = current.models[current.model]
+            if (row === undefined) return current
             return {
               ...current,
-              peakWindows: current.peakWindows.map((row, at) => (at === index ? { ...row, [key]: value } : row)),
+              models: { ...current.models, [current.model]: { ...row, ...patch } },
             }
           })
 
+          const updateWindow = (index, key, value) => setDraft((current) => {
+            if (current === null) return current
+            const row = current.models[current.model]
+            if (row === undefined) return current
+            const windows = (Array.isArray(row.peakWindows) ? row.peakWindows : [])
+              .map((window, at) => (at === index ? { ...window, [key]: value } : window))
+            return { ...current, models: { ...current.models, [current.model]: { ...row, peakWindows: windows } } }
+          })
+
           const addWindow = () => setDraft((current) => {
-            if (current === null || current.peakWindows.length >= 8) return current
-            return { ...current, peakWindows: [...current.peakWindows, { from: '', to: '' }] }
+            if (current === null) return current
+            const row = current.models[current.model]
+            if (row === undefined) return current
+            const windows = Array.isArray(row.peakWindows) ? row.peakWindows : []
+            if (windows.length >= 8) return current
+            return {
+              ...current,
+              models: { ...current.models, [current.model]: { ...row, peakWindows: [...windows, { from: '', to: '' }] } },
+            }
           })
 
+          /**
+           * Removing the last interval turns the model into a single-price one: its off-peak
+           * prices are cleared with it, because a tariff that never applies has no price.
+           */
           const removeWindow = (index) => setDraft((current) => {
-            if (current === null || current.peakWindows.length <= 1) return current
-            return { ...current, peakWindows: current.peakWindows.filter((row, at) => at !== index) }
+            if (current === null) return current
+            const row = current.models[current.model]
+            if (row === undefined) return current
+            const windows = (Array.isArray(row.peakWindows) ? row.peakWindows : [])
+              .filter((window, at) => at !== index)
+            const next = windows.length === 0
+              ? { ...row, peakWindows: windows, offPeakCacheHit: '0', offPeakCacheMiss: '0', offPeakOutput: '0' }
+              : { ...row, peakWindows: windows }
+            return { ...current, models: { ...current.models, [current.model]: next } }
           })
 
-          // The price fields always edit the plan of the model selected above them.
+          /** Picking a model the profile does not price yet starts it from the shipped row. */
+          const selectModel = (id) => setDraft((current) => {
+            if (current === null) return current
+            const info = availableList.find(model => model.id === id)
+            const models = current.models[id] !== undefined
+              ? current.models
+              : { ...current.models, [id]: blankRowOf(id, info !== null && info !== undefined ? info.deepseek : undefined) }
+            return { ...current, model: id, models }
+          })
+
+          // Every field below edits the row of the model selected above it.
           const selectedModel = draft !== null ? draft.model : null
           const selectedPrices = draft !== null && selectedModel !== null && draft.models[selectedModel] !== undefined
             ? draft.models[selectedModel]
             : null
+          const selectedWindows = selectedPrices !== null && Array.isArray(selectedPrices.peakWindows)
+            ? selectedPrices.peakWindows
+            : []
+          // A model without peak hours has one price: the off-peak column disappears with it.
+          const selectedHasOffPeak = selectedWindows.length > 0
+          // The list this Harness offers, plus rows the profile already saved.
+          const availableGroups = draft !== null ? availableModelsOf(catalog, draft.models) : []
+          const availableList = availableGroups.flatMap(group => group.models)
+          const selectedInfo = selectedModel !== null
+            ? availableList.find(model => model.id === selectedModel) || null
+            : null
+          // Autofill loads the DeepSeek price list, so only a DeepSeek model offers it — and the
+          // published list itself is linked beside it for the same reason.
+          const selectedDeepSeek = selectedInfo !== null && selectedInfo.deepseek === true
 
           const priceField = (key) => h('input', {
             className: 'dts-input',
@@ -984,16 +1229,17 @@ window.__ModuleLoader__.load({
             min: '0',
             value: selectedPrices !== null ? selectedPrices[key] : '',
             disabled: busy || selectedPrices === null,
-            onChange: (event) => setDraft((current) => {
-              if (current === null) return current
-              const row = current.models[current.model]
-              if (row === undefined) return current
-              return {
-                ...current,
-                models: { ...current.models, [current.model]: { ...row, [key]: event.target.value } },
-              }
-            }),
+            onChange: (event) => updateRow({ [key]: event.target.value }),
           })
+
+          const modelOption = (model) => h('option', { key: model.id, value: model.id },
+            model.name === model.id ? model.id : `${model.name} (${model.id})`)
+
+          // Grouped by provider, exactly as the Harness lists them in its own settings.
+          const modelChoices = availableGroups.map(group => h('optgroup', {
+            key: `group-${group.id}`,
+            label: group.configured || group.name === null ? t('otherProviders') : group.name,
+          }, group.models.map(modelOption)))
 
           const panel = panelOpen && draft !== null
             ? h('div', { className: 'dts-panel', role: 'dialog', 'aria-label': t('settingsTitle') },
@@ -1012,8 +1258,8 @@ window.__ModuleLoader__.load({
                   h('option', { value: 'auto' }, t('langAuto')),
                   h('option', { value: 'en' }, 'English'),
                   h('option', { value: 'ru' }, 'Русский')))),
-              // One set of price fields, switched between the models; the button beside the
-              // switch writes the edited prices without closing the panel.
+              // The models come from the running Harness; the button beside the switch writes
+              // the edited prices without closing the panel.
               h('div', { className: 'dts-field' },
                 h('span', { className: 'dts-field-label' }, t('modelLabel')),
                 h('span', { className: 'dts-field-body' },
@@ -1023,11 +1269,10 @@ window.__ModuleLoader__.load({
                     disabled: busy,
                     'aria-label': t('modelLabel'),
                     onChange: (event) => {
-                      setDraft({ ...draft, model: event.target.value })
+                      selectModel(event.target.value)
                       setPanelNote(null)
                     },
-                  },
-                  Object.keys(draft.models).map(id => h('option', { key: id, value: id }, id))),
+                  }, modelChoices),
                   h('button', {
                     type: 'button',
                     className: 'dts-btn dts-inline-btn',
@@ -1035,27 +1280,38 @@ window.__ModuleLoader__.load({
                     disabled: busy,
                     onClick: () => persist(true),
                   }, t('savePrices')))),
-              h('div', { className: 'dts-grid' },
+              h('div', { className: selectedHasOffPeak ? 'dts-grid' : 'dts-grid dts-grid-single' },
                 h('span', { className: 'dts-cell' }, ''),
                 h('span', { className: 'dts-col' }, t('groupPeak')),
-                h('span', { className: 'dts-col' }, t('groupOffPeak')),
+                selectedHasOffPeak ? h('span', { className: 'dts-col' }, t('groupOffPeak')) : null,
                 h('span', { className: 'dts-cell' }, t('cache')),
                 priceField('peakCacheHit'),
-                priceField('offPeakCacheHit'),
+                selectedHasOffPeak ? priceField('offPeakCacheHit') : null,
                 h('span', { className: 'dts-cell' }, t('miss')),
                 priceField('peakCacheMiss'),
-                priceField('offPeakCacheMiss'),
+                selectedHasOffPeak ? priceField('offPeakCacheMiss') : null,
                 h('span', { className: 'dts-cell' }, t('output')),
                 priceField('peakOutput'),
-                priceField('offPeakOutput')),
+                selectedHasOffPeak ? priceField('offPeakOutput') : null),
               h('div', { className: 'dts-autofill' },
-                h('button', {
-                  type: 'button',
-                  className: 'dts-btn',
-                  title: t('autoFill'),
-                  disabled: busy || autofilling,
-                  onClick: autoFill,
-                }, autofilling ? t('autoFillBusy') : t('autoFill'))),
+                selectedDeepSeek
+                  ? h('button', {
+                    type: 'button',
+                    className: 'dts-btn',
+                    title: t('autoFill'),
+                    disabled: busy || autofilling,
+                    onClick: autoFill,
+                  }, autofilling ? t('autoFillBusy') : t('autoFill'))
+                  : null,
+                selectedDeepSeek
+                  ? h('a', {
+                    className: 'dts-link',
+                    href: PRICING_DOCS_URL,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    title: t('pricingDocsTitle'),
+                  }, t('pricingDocs'))
+                  : null),
               h('label', { className: 'dts-field' },
                 h('span', { className: 'dts-field-label' }, t('rate')),
                 h('span', { className: 'dts-field-body' }, h('input', {
@@ -1063,14 +1319,14 @@ window.__ModuleLoader__.load({
                   type: 'number',
                   step: 'any',
                   min: '0',
-                  value: draft.cnyPerUsd,
-                  disabled: busy,
-                  onChange: (event) => setDraft({ ...draft, cnyPerUsd: event.target.value }),
+                  value: selectedPrices !== null ? selectedPrices.cnyPerUsd : '',
+                  disabled: busy || selectedPrices === null,
+                  onChange: (event) => updateRow({ cnyPerUsd: event.target.value }),
                 }))),
               h('div', { className: 'dts-block' },
                 h('div', { className: 'dts-block-label' }, t('windows')),
                 h('div', { className: 'dts-window-list' },
-                  draft.peakWindows.map((row, index) => h('div', { className: 'dts-window-row', key: `window-${index}` },
+                  selectedWindows.map((row, index) => h('div', { className: 'dts-window-row', key: `window-${index}` },
                     h('input', {
                       className: 'dts-input dts-time',
                       type: 'time',
@@ -1093,15 +1349,16 @@ window.__ModuleLoader__.load({
                       className: 'dts-mini-btn',
                       title: t('removeWindow'),
                       'aria-label': t('removeWindow'),
-                      disabled: busy || draft.peakWindows.length <= 1,
+                      disabled: busy,
                       onClick: () => removeWindow(index),
                     }, '×'))),
                   h('button', {
                     type: 'button',
                     className: 'dts-btn dts-add',
-                    disabled: busy || draft.peakWindows.length >= 8,
+                    disabled: busy || selectedWindows.length >= 8,
                     onClick: addWindow,
-                  }, `+ ${t('addWindow')}`))),
+                  }, `+ ${t('addWindow')}`)),
+                selectedHasOffPeak ? null : h('div', { className: 'dts-note-inline' }, t('noWindows'))),
               h('label', { className: 'dts-field' },
                 h('span', { className: 'dts-field-label' }, t('scopeLabel')),
                 h('span', { className: 'dts-field-body' },
@@ -1121,7 +1378,11 @@ window.__ModuleLoader__.load({
                   className: 'dts-btn',
                   disabled: busy,
                   onClick: () => {
-                    setDraft(draftFrom({}))
+                    setDraft((current) => {
+                      const next = draftFrom({})
+                      if (current !== null && next.models[current.model] !== undefined) next.model = current.model
+                      return next
+                    })
                     setPanelNote(null)
                   },
                 }, t('reset')),
@@ -1139,13 +1400,15 @@ window.__ModuleLoader__.load({
                 }, busy ? t('saving') : t('save'))))
             : null
 
-          const tariffName = peakNow ? t('peak') : t('offPeak')
-          const tariffHint = peakNow ? t('peakTitle') : t('offPeakTitle')
+          // A model without peak hours has one price, so the bar names that single tariff and
+          // shows no countdown: there is no boundary to count to.
+          const tariffName = singleTariff ? t('singleTariff') : (peakNow ? t('peak') : t('offPeak'))
+          const tariffHint = singleTariff ? t('singleTariffTitle') : (peakNow ? t('peakTitle') : t('offPeakTitle'))
           const flipLabel = peakNow ? t('switchToOffPeak') : t('switchToPeak')
-          const dotTitle = `${tariffName} · ${flipLabel} ${remaining}`
-          const accent = peakNow
-            ? 'var(--dsw-alias-state-error-primary)'
-            : 'var(--dsw-alias-state-success-primary)'
+          const dotTitle = boundary !== null ? `${tariffName} · ${flipLabel} ${remaining}` : tariffName
+          const accent = singleTariff
+            ? 'var(--dsw-alias-label-secondary)'
+            : (peakNow ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-state-success-primary)')
 
           const parts = [
             h('style', { key: 'style' }, STYLE),
@@ -1165,43 +1428,55 @@ window.__ModuleLoader__.load({
           if (snapshot === null) {
             parts.push(h('span', { key: 'state' }, failed ? t('unavailable') : t('loading')))
           } else {
-            parts.push(
-              h('span', {
-                key: 'scope',
-                className: 'dts-group',
-                title: scopedToSession ? t('scopeSessionTitle') : t('scopeAllTitle'),
-              },
-                h('span', { className: 'dts-strong' }, scopedToSession ? t('scopeSession') : t('scopeAll'))),
-              h('span', { key: 'sep-scope', className: 'dts-sep', 'aria-hidden': true }),
-              h('span', { key: 'model', className: 'dts-group dts-model', title: modelTitle },
-                h('span', null, t('model')),
-                h('span', { className: 'dts-strong' }, modelLabel)),
-              h('span', { key: 'sep-model', className: 'dts-sep', 'aria-hidden': true }),
-              h('span', { key: 'peak', className: 'dts-group', title: t('groupPeakTitle') },
-                h('span', null, t('groupPeak')),
-                h('span', { className: 'dts-strong' }, formatTokens(peakTokens)),
-                h('span', null,
-                  `(${t('cache')} ${formatTokens(peak.cacheHit)} / ${t('miss')} ${formatTokens(peak.cacheMiss + peak.cacheWrite)})`)),
-              h('span', { key: 'sep-1', className: 'dts-sep', 'aria-hidden': true }),
-              h('span', { key: 'offPeak', className: 'dts-group', title: t('groupOffPeakTitle') },
+            const groups = []
+            const add = (key, node, separatorClass) => {
+              if (groups.length > 0) {
+                groups.push(h('span', {
+                  key: `sep-${key}`,
+                  className: separatorClass !== undefined ? `dts-sep ${separatorClass}` : 'dts-sep',
+                  'aria-hidden': true,
+                }))
+              }
+              groups.push(node)
+            }
+            add('scope', h('span', {
+              key: 'scope',
+              className: 'dts-group',
+              title: scopedToSession ? t('scopeSessionTitle') : t('scopeAllTitle'),
+            },
+              h('span', { className: 'dts-strong' }, scopedToSession ? t('scopeSession') : t('scopeAll'))))
+            add('model', h('span', { key: 'model', className: 'dts-group dts-model', title: modelTitle },
+              h('span', null, t('model')),
+              h('span', { className: 'dts-strong' }, modelLabel)))
+            add('peak', h('span', { key: 'peak', className: 'dts-group', title: t('groupPeakTitle') },
+              h('span', null, t('groupPeak')),
+              h('span', { className: 'dts-strong' }, formatTokens(peakTokens)),
+              h('span', null,
+                `(${t('cache')} ${formatTokens(peak.cacheHit)} / ${t('miss')} ${formatTokens(peak.cacheMiss + peak.cacheWrite)})`)))
+            // The off-peak half belongs to a model that has peak hours; without them the whole
+            // spend is billed at one price and the section would always read zero.
+            if (showOffPeak) {
+              add('offPeak', h('span', { key: 'offPeak', className: 'dts-group', title: t('groupOffPeakTitle') },
                 h('span', null, t('groupOffPeak')),
                 h('span', { className: 'dts-strong' }, formatTokens(offPeakTokens)),
                 h('span', null,
-                  `(${t('cache')} ${formatTokens(offPeak.cacheHit)} / ${t('miss')} ${formatTokens(offPeak.cacheMiss + offPeak.cacheWrite)})`)),
-              h('span', { key: 'sep-2', className: 'dts-sep dts-optional', 'aria-hidden': true }),
-              h('span', { key: 'output', className: 'dts-group dts-optional' },
-                h('span', null, t('output')),
-                h('span', { className: 'dts-strong' }, formatTokens(outputTokens))),
-              h('span', { key: 'sep-3', className: 'dts-sep', 'aria-hidden': true }),
-              h('span', { key: 'cost', className: 'dts-group', title: costTitle },
+                  `(${t('cache')} ${formatTokens(offPeak.cacheHit)} / ${t('miss')} ${formatTokens(offPeak.cacheMiss + offPeak.cacheWrite)})`)))
+            }
+            add('output', h('span', { key: 'output', className: 'dts-group dts-optional' },
+              h('span', null, t('output')),
+              h('span', { className: 'dts-strong' }, formatTokens(outputTokens))), 'dts-optional')
+            // A model priced at zero in the settings is counted in tokens only.
+            if (showCost) {
+              add('cost', h('span', { key: 'cost', className: 'dts-group', title: costTitle },
                 h('span', null, t('cost')),
-                h('span', { className: 'dts-strong' }, `${formatMoney(money.usd, '$')} / ${formatMoney(money.cny, '¥')}`)),
-              h('span', { key: 'spacer', className: 'dts-spacer', 'aria-hidden': true }),
-              h('span', { key: 'total', className: 'dts-right', title: t('totalTitle') },
-                h('span', null, t('total')),
-                h('span', { className: 'dts-strong' }, formatTokens(processTokens)),
-                h('span', null, t('since'))),
-            )
+                h('span', { className: 'dts-strong' }, `${formatMoney(money.usd, '$')} / ${formatMoney(money.cny, '¥')}`)))
+            }
+            parts.push(...groups)
+            parts.push(h('span', { key: 'spacer', className: 'dts-spacer', 'aria-hidden': true }))
+            parts.push(h('span', { key: 'total', className: 'dts-right', title: t('totalTitle') },
+              h('span', null, t('total')),
+              h('span', { className: 'dts-strong' }, formatTokens(processTokens)),
+              h('span', null, t('since'))))
           }
 
           parts.push(h('div', { key: 'settings', className: 'dts-settings', ref: rootRef },

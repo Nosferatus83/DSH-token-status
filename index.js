@@ -5,17 +5,21 @@
  * session *and per model*, and serves the browser half one JSON snapshot. The browser half
  * owns rendering and the settings form; this half owns counting, the tariff decision, the
  * model a session is running, and persisting the plan constants through the profile's
- * config editor. It also fetches the published price list for the "Autofill" button.
+ * config editor. It also lists the models this Harness can actually route to and fetches
+ * the published price list for the "Autofill" button.
  */
 
 import {
   addUsage,
   costPair,
   emptyBucket,
+  hasOffPeak,
   isPeak,
   mergeBuckets,
+  modelRate,
   nextBoundary,
   planFor,
+  planHasPrices,
   promptTokensOf,
   resolveConfig,
   resolveLanguage,
@@ -28,6 +32,7 @@ import { fetchPricing } from './pricing.js'
 const ROUTE_PREFIX = '/token-status'
 const SNAPSHOT_PATH = `${ROUTE_PREFIX}/snapshot`
 const SETTINGS_PATH = `${ROUTE_PREFIX}/settings`
+const MODELS_PATH = `${ROUTE_PREFIX}/models`
 const PRICING_PATH = `${ROUTE_PREFIX}/pricing/refresh`
 
 /** Keeps the step-start index bounded; a runaway session cannot grow it without limit. */
@@ -36,8 +41,17 @@ const MAX_PENDING_STEPS = 4000
 /** Refuses oversized settings bodies before buffering past this many bytes. */
 const MAX_BODY_BYTES = 64 * 1024
 
-/** Plans one settings save may carry; the panel offers two. */
+/** Plans one settings save may carry; the panel offers far fewer. */
 const MAX_MODELS = 16
+
+/** How long a model catalog answer stays usable, so opening the panel is not a network call. */
+const MODEL_CATALOG_TTL_MS = 30_000
+
+/** A provider that does not answer its model listing must not hold the settings panel. */
+const MODEL_LIST_TIMEOUT_MS = 5000
+
+/** The provider family whose published prices the Autofill button can load. */
+const DEEPSEEK_PROVIDER = /deepseek/i
 
 /**
  * Usage is billed by the tariff in force when the request started. A durable event time is
@@ -74,9 +88,23 @@ function windowOf(raw) {
   return { from, to }
 }
 
-/** The plan a settings submission carries for every model, or `undefined` when one is broken. */
+/** Every valid interval of a submitted list; an empty answer is a real choice, not an error. */
+function windowsOf(raw) {
+  const windows = []
+  for (const candidate of Array.isArray(raw) ? raw.slice(0, 8) : []) {
+    const window = windowOf(candidate)
+    if (window !== undefined) windows.push(window)
+  }
+  return windows
+}
+
+/**
+ * The plan a settings submission carries for every model, or a refusal code. Peak intervals
+ * and the rate are per model: an entry that names them keeps them, an entry that does not
+ * inherits the row-level values the panel mirrors into the payload.
+ */
 function modelsOf(raw) {
-  if (raw === null || typeof raw !== 'object') return undefined
+  if (raw === null || typeof raw !== 'object') return { error: 'pricing' }
   const models = {}
   let count = 0
   for (const [rawId, rawPlan] of Object.entries(raw)) {
@@ -86,11 +114,20 @@ function modelsOf(raw) {
     const source = rawPlan !== null && typeof rawPlan === 'object' ? rawPlan : {}
     const peak = tariffOf(source.peak)
     const offPeak = tariffOf(source.offPeak)
-    if (peak === undefined || offPeak === undefined) return undefined
-    models[id] = { peak, offPeak }
+    if (peak === undefined || offPeak === undefined) return { error: 'pricing' }
+
+    const entry = { peak, offPeak }
+    if (Array.isArray(source.peakWindows)) entry.peakWindows = windowsOf(source.peakWindows)
+    const namesRate = source.cnyPerUsd !== undefined && source.cnyPerUsd !== null && source.cnyPerUsd !== ''
+    if (namesRate) {
+      const rate = priceOf(source.cnyPerUsd)
+      if (rate === undefined || rate <= 0) return { error: 'rate' }
+      entry.cnyPerUsd = rate
+    }
+    models[id] = entry
     count += 1
   }
-  return count > 0 ? models : undefined
+  return count > 0 ? { models } : { error: 'pricing' }
 }
 
 /**
@@ -101,36 +138,43 @@ function modelsOf(raw) {
 function sanitizeSettings(raw) {
   const source = raw !== null && typeof raw === 'object' ? raw : {}
 
-  const models = modelsOf(source.models)
-  if (models === undefined) {
+  const parsed = modelsOf(source.models)
+  if (parsed.error === 'rate') {
+    return { ok: false, code: 'rate', message: 'The USD→CNY rate must be a positive number.' }
+  }
+  if (parsed.error !== undefined) {
     return { ok: false, code: 'pricing', message: 'Every model needs peak and off-peak prices as non-negative numbers.' }
   }
+  const models = parsed.models
+
+  const topRate = priceOf(source.cnyPerUsd)
+  const fallbackRate = topRate !== undefined && topRate > 0 ? topRate : undefined
+  for (const entry of Object.values(models)) {
+    if (entry.cnyPerUsd !== undefined) continue
+    if (fallbackRate === undefined) {
+      return { ok: false, code: 'rate', message: 'The USD→CNY rate must be a positive number.' }
+    }
+    entry.cnyPerUsd = fallbackRate
+  }
+
   const requestedDefault = normalizeModelId(source.defaultModel)
   const defaultModel = requestedDefault !== undefined && models[requestedDefault] !== undefined
     ? requestedDefault
     : Object.keys(models)[0]
 
-  const cnyPerUsd = priceOf(source.cnyPerUsd)
-  if (cnyPerUsd === undefined || cnyPerUsd <= 0) {
-    return { ok: false, code: 'rate', message: 'The USD→CNY rate must be a positive number.' }
-  }
-
-  const windows = []
-  for (const candidate of Array.isArray(source.peakWindows) ? source.peakWindows.slice(0, 8) : []) {
-    const window = windowOf(candidate)
-    if (window !== undefined) windows.push(window)
-  }
-  if (windows.length === 0) {
-    return { ok: false, code: 'windows', message: 'At least one peak interval as HH:MM (UTC) is required.' }
-  }
+  // The row-level pair is the mirror a model without its own intervals or rate inherits.
+  const mirroredWindows = Array.isArray(source.peakWindows) ? windowsOf(source.peakWindows) : []
+  const defaultWindows = Array.isArray(models[defaultModel].peakWindows)
+    ? models[defaultModel].peakWindows
+    : mirroredWindows
 
   return {
     ok: true,
     config: {
       models,
       defaultModel,
-      cnyPerUsd,
-      peakWindows: windows,
+      cnyPerUsd: models[defaultModel].cnyPerUsd,
+      peakWindows: defaultWindows,
       scope: source.scope === 'process' ? 'process' : 'session',
       language: resolveLanguage(source.language),
     },
@@ -165,6 +209,35 @@ function modelOfEvent(event, data) {
   return undefined
 }
 
+/** True when the provider id or its display name marks the DeepSeek family. */
+function isDeepSeekProvider(id, name) {
+  return DEEPSEEK_PROVIDER.test(`${typeof id === 'string' ? id : ''} ${typeof name === 'string' ? name : ''}`)
+}
+
+/** A provider that never answers its model listing loses the race instead of the panel. */
+function withTimeout(promise, ms, message) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      reject(new Error(message))
+    }, ms)
+    if (typeof timer.unref === 'function') timer.unref()
+    Promise.resolve(promise).then((value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }, (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
+
 export function apply(ctx, rawConfig) {
   // Mutable so a settings save that the profile refuses can still apply for this run.
   let config = resolveConfig(rawConfig)
@@ -180,6 +253,8 @@ export function apply(ctx, rawConfig) {
   const perSession = new Map()
   /** Step start times, so a usage report is billed by the tariff in force when the request started. */
   const stepStarts = new Map()
+  /** Last model-catalog answer, so opening the settings panel does not repeat the network call. */
+  let catalogCache = null
 
   const sessionKey = (sessionId, turn, step) => `${sessionId}\u0000${turn}\u0000${step}`
 
@@ -217,7 +292,8 @@ export function apply(ctx, rawConfig) {
     const modelId = model !== undefined ? model : (entry.model !== undefined ? entry.model : config.defaultModel)
     // A log written before selections and headers were recorded only has messages to go on.
     if (!entry.announced) entry.model = modelId
-    const tariff = isPeak(timeMs, config) ? 'peak' : 'offPeak'
+    // A model without peak intervals has one price for the whole day: everything is "peak".
+    const tariff = isPeak(timeMs, config, modelId) ? 'peak' : 'offPeak'
     addUsage(bucketsOf(sessionId, modelId)[tariff], usage)
   }
 
@@ -278,8 +354,12 @@ export function apply(ctx, rawConfig) {
     'token-status: drop stale step starts',
   )
 
-  /** One model's tariff buckets, priced by that model's own plan. */
+  /**
+   * One model's tariff buckets, priced by that model's own plan and rate. `enabled` is false
+   * when every price is zero, which is how the bar knows to show tokens without a cost.
+   */
   function packBuckets(model, peak, offPeak) {
+    const plan = planFor(config, model)
     return {
       model,
       totals: { peak, offPeak },
@@ -290,7 +370,12 @@ export function apply(ctx, rawConfig) {
         output: peak.output + offPeak.output,
         total: tokensOf(peak) + tokensOf(offPeak),
       },
-      cost: costPair(peak, offPeak, planFor(config, model), config.cnyPerUsd),
+      cost: {
+        ...costPair(peak, offPeak, plan, modelRate(config, model)),
+        enabled: planHasPrices(plan),
+      },
+      /** False for a model without peak intervals: it has no off-peak half to show. */
+      hasOffPeak: hasOffPeak(config, model),
     }
   }
 
@@ -341,6 +426,8 @@ export function apply(ctx, rawConfig) {
     const perModel = {}
     let usd = 0
     let cny = 0
+    let priced = false
+    let discounted = false
     for (const [id, pair] of usable) {
       mergeBuckets(peak, pair.peak)
       mergeBuckets(offPeak, pair.offPeak)
@@ -348,6 +435,8 @@ export function apply(ctx, rawConfig) {
       perModel[id] = view
       usd += view.cost.usd
       cny += view.cost.cny
+      priced = priced || view.cost.enabled === true
+      discounted = discounted || view.hasOffPeak === true
     }
 
     return {
@@ -361,18 +450,26 @@ export function apply(ctx, rawConfig) {
         output: peak.output + offPeak.output,
         total: tokensOf(peak) + tokensOf(offPeak),
       },
-      cost: { usd, cny },
+      cost: { usd, cny, enabled: priced },
+      hasOffPeak: discounted,
       models: Object.keys(perModel),
       perModel,
     }
   }
 
+  /** The model the snapshot's tariff indicator speaks for: the session's when known. */
+  function modelInForce(sessionId) {
+    const entry = typeof sessionId === 'string' && sessionId !== '' ? perSession.get(sessionId) : undefined
+    return entry !== undefined && entry.model !== undefined ? entry.model : config.defaultModel
+  }
+
   function snapshot(sessionId) {
     const now = Date.now()
-    const boundary = nextBoundary(now, config)
+    const model = modelInForce(sessionId)
+    const boundary = nextBoundary(now, config, model)
 
     return {
-      version: 3,
+      version: 4,
       generatedAt: now,
       startedAt,
       scope: config.scope,
@@ -387,7 +484,8 @@ export function apply(ctx, rawConfig) {
         language: config.language,
       },
       tariff: {
-        peak: isPeak(now, config),
+        peak: isPeak(now, config, model),
+        model,
         nextChangeAt: boundary.at,
         toPeak: boundary.toPeak,
       },
@@ -395,6 +493,80 @@ export function apply(ctx, rawConfig) {
       session: typeof sessionId === 'string' && sessionId !== '' ? packSession(sessionId) : null,
       sessions: perSession.size,
     }
+  }
+
+  /**
+   * Every model this Harness can route to, grouped by provider. The settings panel needs the
+   * provider too: only a DeepSeek route has a published price list to autofill. A provider
+   * that fails or times out is reported beside the groups instead of hiding them.
+   */
+  async function modelCatalog() {
+    const now = Date.now()
+    if (catalogCache !== null && now - catalogCache.at < MODEL_CATALOG_TTL_MS) return catalogCache.value
+
+    const groups = []
+    const failures = []
+    const llm = ctx.get('llm')
+    if (llm !== undefined && typeof llm.listProviders === 'function' && typeof llm.listModels === 'function') {
+      let providers = []
+      try {
+        providers = llm.listProviders()
+      } catch {
+        providers = []
+      }
+      const settled = await Promise.all((Array.isArray(providers) ? providers : []).map(async (provider) => {
+        const id = provider !== null && typeof provider === 'object' && typeof provider.id === 'string'
+          ? provider.id
+          : undefined
+        if (id === undefined) return undefined
+        const name = typeof provider.name === 'string' && provider.name !== '' ? provider.name : id
+        const deepseek = isDeepSeekProvider(id, name)
+        try {
+          const listed = await withTimeout(llm.listModels(id), MODEL_LIST_TIMEOUT_MS,
+            `provider "${id}" did not answer its model listing in ${MODEL_LIST_TIMEOUT_MS} ms`)
+          const models = (Array.isArray(listed) ? listed : [])
+            .filter(model => model !== null && typeof model === 'object' &&
+              typeof model.id === 'string' && model.id !== '')
+            .map(model => ({
+              id: model.id,
+              name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id,
+              deepseek,
+            }))
+          return { id, name, deepseek, models }
+        } catch (error) {
+          failures.push({
+            id,
+            name,
+            message: error !== null && typeof error === 'object' && typeof error.message === 'string'
+              ? error.message.slice(0, 200)
+              : 'model listing failed',
+          })
+          return undefined
+        }
+      }))
+      for (const group of settled) {
+        if (group !== undefined && group.models.length > 0) groups.push(group)
+      }
+    }
+
+    // A model this row already prices stays selectable even when no provider advertises it.
+    const known = new Set(groups.flatMap(group => group.models.map(entry => entry.id)))
+    const configured = Object.keys(config.models)
+      .filter(id => !known.has(id))
+      .map(id => ({ id, name: id, deepseek: isDeepSeekProvider(id) }))
+    if (configured.length > 0) {
+      groups.push({ id: 'configured', name: null, deepseek: configured.every(entry => entry.deepseek), models: configured })
+    }
+
+    const value = {
+      ok: true,
+      fetchedAt: now,
+      source: groups.some(group => group.id !== 'configured') ? 'catalog' : 'config',
+      groups,
+      failures,
+    }
+    catalogCache = { at: now, value }
+    return value
   }
 
   /**
@@ -482,6 +654,22 @@ export function apply(ctx, rawConfig) {
         return
       }
       const body = JSON.stringify(snapshot(url.searchParams.get('session')))
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(req.method === 'HEAD' ? undefined : body)
+      return
+    }
+
+    if (url.pathname === MODELS_PATH) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        send(405, { error: 'token-status: GET or HEAD only' })
+        return
+      }
+      if (url.searchParams.get('refresh') === '1') catalogCache = null
+      const body = JSON.stringify(await modelCatalog())
       res.writeHead(200, {
         'content-type': 'application/json; charset=utf-8',
         'cache-control': 'no-store',
